@@ -575,15 +575,14 @@ export function ChangeStageDialog({
                 aria-label="Next steps"
                 className="space-y-2 border-t border-slate-100 pt-5 dark:border-slate-800"
               >
-                {onCreateOrder && prospect && (
-                  <Button
-                    type="button"
-                    onClick={() => goTo(onCreateOrder, "/orders")}
-                    className="h-10 w-full gap-2 rounded-xl bg-[#67B239] text-sm font-semibold text-white hover:bg-[#5aa030] cursor-pointer"
-                  >
-                    <Package className="size-4" /> Create Order
-                  </Button>
-                )}
+                <Button
+                  type="button"
+                  disabled={!prospect}
+                  onClick={() => goTo(onCreateOrder, "/orders")}
+                  className="h-10 w-full gap-2 rounded-xl bg-[#67B239] text-sm font-semibold text-white hover:bg-[#5aa030] cursor-pointer"
+                >
+                  <Package className="size-4" /> Create Order
+                </Button>
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     type="button"

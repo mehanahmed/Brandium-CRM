@@ -222,27 +222,28 @@ export function computeDeliveredCount(
 }
 
 /** Meetings dated in the range (not cancelled) and quotations dated in the range. */
+/** `DATE(column)` bounds for the dashboard range; pushes the matching params. */
+const dateFilter = (range: DashboardDateRange, column: string, params: string[]) => {
+  const parts: string[] = [];
+  if (range.from) {
+    parts.push(`DATE(${column}) >= ?`);
+    params.push(range.from);
+  }
+  if (range.to) {
+    parts.push(`DATE(${column}) <= ?`);
+    params.push(range.to);
+  }
+  return parts;
+};
+
 export const dashboardActivityCountsQuery = (range: DashboardDateRange, scopeUserId?: string) =>
   queryOptions({
     queryKey: ["dashboard", "activity-counts", range, scopeUserId],
     queryFn: async (): Promise<{ meetings: number; quotations: number }> => {
-      const dateFilter = (column: string, params: string[]) => {
-        const parts: string[] = [];
-        if (range.from) {
-          parts.push(`DATE(${column}) >= ?`);
-          params.push(range.from);
-        }
-        if (range.to) {
-          parts.push(`DATE(${column}) <= ?`);
-          params.push(range.to);
-        }
-        return parts;
-      };
-
       const meetingParams: string[] = [];
       const meetingWhere = [
         "COALESCE(status, '') <> 'Cancelled'",
-        ...dateFilter("COALESCE(meeting_date, scheduled_at, created_at)", meetingParams),
+        ...dateFilter(range, "COALESCE(meeting_date, scheduled_at, created_at)", meetingParams),
       ];
       if (scopeUserId) {
         meetingWhere.push("(assigned_user_id = ? OR assigned_to = ? OR created_by = ?)");
@@ -252,7 +253,7 @@ export const dashboardActivityCountsQuery = (range: DashboardDateRange, scopeUse
       const quotationParams: string[] = [];
       const quotationWhere = [
         "COALESCE(is_active, 1) = 1",
-        ...dateFilter("COALESCE(order_date, created_at)", quotationParams),
+        ...dateFilter(range, "COALESCE(order_date, created_at)", quotationParams),
       ];
       if (scopeUserId) {
         quotationWhere.push("(created_by = ? OR assigned_agent_id = ? OR assigned_artist_id = ?)");
@@ -277,6 +278,96 @@ export const dashboardActivityCountsQuery = (range: DashboardDateRange, scopeUse
   });
 
 /** Expenses per day (`yyyy-MM-dd` → amount) for the Revenues and expenses chart. */
+export type QuotationBucket =
+  "draft" | "sent" | "underReview" | "negotiation" | "revised" | "accepted" | "rejected";
+
+/** Quotation stage → summary card; same rules as the Quotations page. */
+export const quotationBucket = (status: string | null | undefined): QuotationBucket | null => {
+  const s = String(status ?? "")
+    .toLowerCase()
+    .trim();
+  if (s === "draft") return "draft";
+  if (s === "sent") return "sent";
+  if (s.includes("review")) return "underReview";
+  if (s.includes("negotiat")) return "negotiation";
+  if (s.includes("revis")) return "revised";
+  if (s.includes("accept") || s.includes("approv")) return "accepted";
+  if (s.includes("reject") || s.includes("declin") || s.includes("expir")) return "rejected";
+  return null;
+};
+
+export type SummaryCounts = {
+  meetings: { total: number; scheduled: number; completed: number; cancelled: number; sms: number };
+  quotations: Record<QuotationBucket | "all", number>;
+};
+
+/** Meeting and quotation summary cards; same date and user rules as `dashboardActivityCountsQuery`. */
+export const dashboardSummaryCountsQuery = (range: DashboardDateRange, scopeUserId?: string) =>
+  queryOptions({
+    queryKey: ["dashboard", "summary-counts", range, scopeUserId],
+    queryFn: async (): Promise<SummaryCounts> => {
+      const meetingParams: string[] = [];
+      const meetingWhere = dateFilter(
+        range,
+        "COALESCE(meeting_date, scheduled_at, created_at)",
+        meetingParams,
+      );
+      if (scopeUserId) {
+        meetingWhere.push("(assigned_user_id = ? OR assigned_to = ? OR created_by = ?)");
+        meetingParams.push(scopeUserId, scopeUserId, scopeUserId);
+      }
+      const quotationParams: string[] = [];
+      const quotationWhere = [
+        "COALESCE(is_active, 1) = 1",
+        ...dateFilter(range, "COALESCE(order_date, created_at)", quotationParams),
+      ];
+      if (scopeUserId) {
+        quotationWhere.push("(created_by = ? OR assigned_agent_id = ? OR assigned_artist_id = ?)");
+        quotationParams.push(scopeUserId, scopeUserId, scopeUserId);
+      }
+      const meetingSql = meetingWhere.length ? ` WHERE ${meetingWhere.join(" AND ")}` : "";
+      const [meetingsRes, quotationsRes] = await Promise.all([
+        runMySQLQuery<Record<string, unknown>[]>(
+          `SELECT COALESCE(status, '') AS status, COUNT(*) AS cnt, SUM(COALESCE(sms_sent, 0)) AS sms FROM \`meetings\`${meetingSql} GROUP BY COALESCE(status, '');`,
+          meetingParams,
+        ),
+        runMySQLQuery<Record<string, unknown>[]>(
+          `SELECT COALESCE(status, '') AS status, COUNT(*) AS cnt FROM \`quotations\` WHERE ${quotationWhere.join(" AND ")} GROUP BY COALESCE(status, '');`,
+          quotationParams,
+        ),
+      ]);
+
+      const meetings = { total: 0, scheduled: 0, completed: 0, cancelled: 0, sms: 0 };
+      for (const row of meetingsRes.data || []) {
+        const cnt = Number(row["cnt"] || 0);
+        const status = String(row["status"] || "").toLowerCase();
+        meetings.total += cnt;
+        meetings.sms += Number(row["sms"] || 0);
+        if (status === "scheduled") meetings.scheduled += cnt;
+        else if (status === "completed") meetings.completed += cnt;
+        else if (status === "cancelled") meetings.cancelled += cnt;
+      }
+
+      const quotations: SummaryCounts["quotations"] = {
+        all: 0,
+        draft: 0,
+        sent: 0,
+        underReview: 0,
+        negotiation: 0,
+        revised: 0,
+        accepted: 0,
+        rejected: 0,
+      };
+      for (const row of quotationsRes.data || []) {
+        const cnt = Number(row["cnt"] || 0);
+        quotations.all += cnt;
+        const bucket = quotationBucket(String(row["status"] || ""));
+        if (bucket) quotations[bucket] += cnt;
+      }
+      return { meetings, quotations };
+    },
+  });
+
 export const dashboardExpenseSeriesQuery = (range: DashboardDateRange, recordedBy?: string) =>
   queryOptions({
     queryKey: ["dashboard", "expense-series", range, recordedBy],

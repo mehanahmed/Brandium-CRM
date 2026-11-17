@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import {
@@ -11,7 +12,12 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   CalendarCheck,
+  CalendarDays,
+  CheckCircle2,
+  Clock,
   FileSpreadsheet,
+  Send,
+  XCircle,
   PackageCheck,
   Briefcase,
   Users,
@@ -46,6 +52,7 @@ import {
   computeDeliveredCount,
   computeFinanceSummary,
   dashboardActivityCountsQuery,
+  dashboardSummaryCountsQuery,
   computeOrderStatusSteps,
   dashboardExpenseQuery,
   dashboardExpenseSeriesQuery,
@@ -56,6 +63,16 @@ import { StatusOverviewCard } from "@/components/dashboard/status-timeline";
 import { ordersQueryOptions } from "@/lib/orders";
 import { FinanceSummaryCard } from "@/components/dashboard/finance-summary-card";
 import { PipelineSummaryCards } from "@/components/dashboard/pipeline-summary-cards";
+import { StatCard } from "@/components/stat-card";
+import {
+  QuotationSummaryCards,
+  type QuotationStats,
+} from "@/components/quotations/quotation-summary-cards";
+import {
+  followUpBoardQueryOptions,
+  followUpStageFor,
+  followUpStagesQueryOptions,
+} from "@/lib/follow-ups";
 
 export default function DashboardPage() {
   const { user, isAdmin } = useAuth();
@@ -100,6 +117,52 @@ export default function DashboardPage() {
     ...prospectStageStepsQuery(range, isAdmin ? filterUserId : userId),
     enabled: Boolean(userId),
   });
+  const summaryQuery = useQuery({
+    ...dashboardSummaryCountsQuery(range, isAdmin ? filterUserId : userId),
+    enabled: Boolean(userId),
+  });
+  const router = useRouter();
+  const summary = summaryQuery.data;
+  const quotationStats: QuotationStats | undefined = summary && {
+    total: summary.quotations.all,
+    draft: summary.quotations.draft,
+    sent: summary.quotations.sent,
+    underReview: summary.quotations.underReview,
+    negotiation: summary.quotations.negotiation,
+    revised: summary.quotations.revised,
+    accepted: summary.quotations.accepted,
+    rejected: summary.quotations.rejected,
+    acceptanceRate: summary.quotations.all
+      ? `${((summary.quotations.accepted / summary.quotations.all) * 100).toFixed(1)}%`
+      : "0.0%",
+  };
+
+  // Follow-up overview: open follow-ups per board column (same user and date rules as the Scheduled follow-ups card)
+  const followUpStages = useQuery(followUpStagesQueryOptions());
+  const followUps = useQuery({
+    ...followUpBoardQueryOptions(userId, isAdmin),
+    enabled: Boolean(userId),
+  });
+  const followUpSteps = useMemo(() => {
+    const stages = followUpStages.data ?? [];
+    const counts = new Map<string, number>();
+    for (const item of followUps.data ?? []) {
+      if (!item.has_follow_up) continue;
+      const day = item.due_at.slice(0, 10);
+      if (range.from && day < range.from) continue;
+      if (range.to && day > range.to) continue;
+      if (filterUserId && ![item.assigned_to, item.created_by].includes(filterUserId)) continue;
+      const stage = followUpStageFor(item.status, stages);
+      if (stage) counts.set(stage.id, (counts.get(stage.id) ?? 0) + 1);
+    }
+    return stages.map((stage) => ({
+      key: stage.id,
+      title: stage.name,
+      color: stage.color,
+      count: counts.get(stage.id) ?? 0,
+    }));
+  }, [followUpStages.data, followUps.data, range.from, range.to, filterUserId]);
+
   const m = metrics.data;
 
   // Your Performance: share of prospects (created in the range, user-filtered) that reached Sales Won
@@ -259,6 +322,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Prospects pipeline summary cards */}
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        Prospects overview
+      </h2>
       <PipelineSummaryCards
         userId={userId}
         isAdmin={isAdmin}
@@ -266,8 +332,74 @@ export default function DashboardPage() {
         range={range}
       />
 
-      {/* Status timeline overviews (Project & Prospect) */}
+      {/* Meeting summary */}
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        Meetings overview
+      </h2>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
+        <StatCard
+          label="Total Meetings"
+          value={String(summary?.meetings.total ?? 0)}
+          icon={CalendarDays}
+          colorScheme="pastelPurple"
+          loading={summaryQuery.isLoading}
+          href="/meetings"
+        />
+        <StatCard
+          label="Scheduled"
+          value={String(summary?.meetings.scheduled ?? 0)}
+          icon={Clock}
+          colorScheme="pastelYellow"
+          loading={summaryQuery.isLoading}
+          href="/meetings"
+        />
+        <StatCard
+          label="Completed"
+          value={String(summary?.meetings.completed ?? 0)}
+          icon={CheckCircle2}
+          colorScheme="pastelEmerald"
+          loading={summaryQuery.isLoading}
+          href="/meetings"
+        />
+        <StatCard
+          label="Cancelled"
+          value={String(summary?.meetings.cancelled ?? 0)}
+          icon={XCircle}
+          colorScheme="pastelPeach"
+          loading={summaryQuery.isLoading}
+          href="/meetings"
+        />
+        <StatCard
+          label="SMS Reminders"
+          value={String(summary?.meetings.sms ?? 0)}
+          icon={Send}
+          colorScheme="pastelTeal"
+          loading={summaryQuery.isLoading}
+          href="/meetings"
+        />
+      </div>
+
+      {/* Quotation summary */}
+      <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        Quotations overview
+      </h2>
+      {quotationStats && (
+        <QuotationSummaryCards
+          stats={quotationStats}
+          selectedStage="all"
+          onSelectStage={() => router.push("/quotations")}
+        />
+      )}
+
+      {/* Status timeline overviews (Project, Prospect & Follow-up) */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 print:hidden">
+        <StatusOverviewCard
+          title="Follow-up Overview"
+          description="Open follow-ups by board stage for the selected period."
+          icon={CalendarCheck}
+          steps={followUpSteps}
+          isLoading={followUps.isLoading || followUpStages.isLoading}
+        />
         <StatusOverviewCard
           title="Project Overview"
           description="Project distribution by status for the selected period."

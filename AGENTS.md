@@ -802,3 +802,40 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
 
 - **SMS Sending Checks the Role on the Server (audit fix 4)**:
   - `/api/sms/send` only checked that someone was signed in, so any role (e.g. Artist) could send up to 500 paid SMS per request. It now returns 403 unless the session is admin or the role has `perm-sms-send`, read by `getRolePermissions(role)` (`src/lib/data-scope-server.ts`: all of a role's permission ids from MySQL, 30s cache per role, fails closed). `getUnscopedTables()` now derives from it. Use `getRolePermissions` for any other server-side permission check; never trust permissions sent from the browser.
+
+- **Dashboard Meeting, Quotation and Follow-up Overview Cards**:
+  - `/dashboard` shows a Meeting summary row (Total, Scheduled, Completed, Cancelled, SMS Reminders; `StatCard` links to `/meetings`), a Quotation summary row (`QuotationSummaryCards`, clicking any card opens `/quotations`) and a "Follow-up Overview" `StatusOverviewCard` beside Project and Prospect Overview. Counts come from `dashboardSummaryCountsQuery` (`src/lib/dashboard-finance.ts`: meetings grouped by status and summed `sms_sent`; quotations grouped by `status` and bucketed by `quotationBucket()`, the same rules as the Quotations page) and from the follow-up board (latest follow-up per prospect, grouped by pipeline stage, filtered by the header date range on `due_at` and the admin user filter).
+  - Date bounds for dashboard queries use the module-level `dateFilter(range, column, params)`; add new summary queries there rather than copying it.
+
+- **Order, Quotation and Meeting From a Lead Log an Activity (`LeadActionDialogs`)**:
+  - `src/components/lead-action-dialogs.tsx` (`LeadActionDialogs`, `LeadAction = { type, prospect }`) hosts the Create Order, Create Quotation and Schedule Meeting dialogs opened from Lead Details. The prospects page and the Follow-up board both mount it; both pass `onBookMeeting` / `onCreateQuotation` / `onCreateOrder` into `ChangeStageDialog` and set the same `leadAction` state. Do not mount these dialogs inside `ChangeStageDialog` or copy them into a page.
+  - On a successful save it calls `addStageNote()` on the lead with a `[Order] ...`, `[Quotation] ...` or `[Meeting] ...` note, so the Activity list shows it. A failed log shows a toast; the saved record is not rolled back.
+  - The Create Order button in Lead Details is always rendered (disabled until the prospect loads), never hidden by a missing handler: a missing handler falls back to `/orders`.
+  - Known gap: meetings booked from other entry points (for example the stage-change "meeting scheduled" path) log nothing unless they route through `LeadActionDialogs`.
+
+- **Follow-up Board Shows Every Active Prospect (`followUpBoardQueryOptions`)**:
+  - The board is one card per active prospect in `prospects`, in the column of its `stage_id`, not only prospects with a follow-up. The card row is the latest follow-up (`follow_up_due_at IS NOT NULL`), else the latest stage row, so `item.id` may be empty for a prospect with no history.
+  - `FollowUpBoardItem.has_follow_up` says whether a real follow-up exists. `due_at` is "" when it does not. Anything that needs a date (dashboard follow-up cards, overview counts, calendar view, date filter, export) must check `has_follow_up` first.
+  - Dragging a prospect with no follow-up inserts a stage row with a NULL `follow_up_due_at`, so it stays off the follow-up lists.
+
+- **Meetings Calendar Tab (`/meetings`)**:
+  - The page has a List / Calendar tab switch above the table. `MeetingCalendarView` (`src/components/meetings/meeting-calendar.tsx`) draws a month grid from the same filtered `meetings` list, with a day panel beside it. Clicking a meeting opens the existing detail modal.
+  - Avatars come from `fetchMeetings`, which joins `profiles` / `users` on `assigned_user_id` and returns `assigned_user_avatar`. Do not look up avatars from names.
+  - Phones show status dots only; `sm` and up show avatar chips.
+
+- **Live Data Without Full Page Refresh (`src/app/providers.tsx`)**:
+  - The QueryClient used `staleTime` 2 min and no refetch on window focus, so data stayed old until a hard reload. Now `staleTime` is 15s, `refetchOnWindowFocus` is `"always"`, `refetchOnReconnect` is on, and `refetchInterval` is 30s with `refetchIntervalInBackground: false` (polling pauses in background tabs).
+  - Mutations must still invalidate their own query keys; polling only covers changes made elsewhere. Do not add global polling inside a page on top of this.
+
+- **Role Matrix: One Permission, One Checkbox (`/admin/roles`)**:
+
+  - `PAGE_ACTIONS`' `all(id)` helper gives Create, Edit, View and Delete the same permission id on pages like Meetings, Follow-ups and Users. The matrix used to draw four checkboxes for one id, so ticking one ticked all four.
+  - `sharedWithEarlier()` makes only the first column with an id show a checkbox; later columns that reuse the id show "same". Never give two matrix columns the same id unless you want them to show as "same". To split a page's rights, give it distinct ids in `PAGE_ACTIONS` and seed them in `ensureMySQLTablesExist()`.
+
+- **Agent Reports Page Redesign (`/admin/agent-reports`)**:
+  - Layout: header with a period switch (All time / Last 7 days / Last 30 days), four KPI cards (won, pipeline, lost, active agents), a top-3 podium and a searchable leaderboard. The agent detail popup (`AdminAgentDetailModal`) was removed per user request; the podium and rows are not clickable.
+  - `fetchAgentReports(period)` now applies the period: prospect counts use `prospects.created_at >= start`, and stage changes and follow-ups count only activities in the window. Won, pipeline and lost values stay all time and are labelled that way. `last_activity` still reads the all-time feed (up to 1000 rows).
+  - Period starts come from `getMySQLTimestamp()` (Dhaka), so they compare directly with MySQL DATETIME text.
+  - An agent's active state comes from `users.status` (`'Active'`), not `users.is_active`. In the local DB every user has `is_active = 0`, so reading `is_active` marked everyone Inactive. Soft-deleted users (`is_deleted = 1`) are left out.
+  - Won / pipeline / lost values come from `orders.total_amount` (all time, not deleted). `delivered` = won, `canceled` = lost, everything else (including `on-hold`) = pipeline. Per agent, the owner is `orders.crm_user_id`. `opportunities` is no longer read here; it is empty locally. The `sales` table lacks the columns `won-sales.ts` selects (`deal_value`, `created_by`, `is_deleted`, `won_at`).
+  - Activity types are `follow_up_created` / `follow_up_updated` (underscore). Matching `includes("followup")` counted 0 follow-ups for everyone, so the report now uses `startsWith("follow_up")`. Stage changes are not in `activities`; they are counted from `prospect_stage_history.changed_by`.

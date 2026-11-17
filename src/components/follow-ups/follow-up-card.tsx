@@ -158,7 +158,11 @@ export function FollowUpCard({
                 title="Next follow-up date"
               >
                 <CalendarDays className="mr-1.5 h-3 w-3 shrink-0" />
-                <span>{formatFollowUpDate(followUp.due_at, "dd MMM, yyyy h:mm a")}</span>
+                <span>
+                  {followUp.has_follow_up
+                    ? formatFollowUpDate(followUp.due_at, "dd MMM, yyyy h:mm a")
+                    : "Not scheduled"}
+                </span>
               </div>
             </div>
 

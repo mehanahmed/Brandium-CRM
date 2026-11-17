@@ -83,6 +83,7 @@ import { resolveStageIcon } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 import { FollowUpCard, formatFollowUpDate } from "./follow-up-card";
 import { ChangeStageDialog } from "@/components/change-stage-dialog";
+import { LeadActionDialogs, type LeadAction } from "@/components/lead-action-dialogs";
 import { LeadCalendarView } from "@/components/pipeline/LeadCalendarView";
 import type { Lead } from "@/types";
 import { useSeesAllData } from "@/lib/use-data-scope";
@@ -185,6 +186,7 @@ export function FollowUpBoard() {
     stage: FollowUpStage;
   } | null>(null);
   const [leadDetailsItem, setLeadDetailsItem] = useState<FollowUpBoardItem | null>(null);
+  const [leadAction, setLeadAction] = useState<LeadAction | null>(null);
   const [deleteItem, setDeleteItem] = useState<FollowUpBoardItem | null>(null);
   const [viewMode, setViewMode] = useState<"kanban" | "calendar">("kanban");
 
@@ -192,7 +194,10 @@ export function FollowUpBoard() {
     const term = searchTerm.trim().toLowerCase();
     return items.filter((item) => {
       // Filter by scheduled follow-up date
-      if (!isFollowUpInDateFilter(item.due_at, dateFilter)) {
+      if (
+        dateFilter.type !== "all" &&
+        (!item.has_follow_up || !isFollowUpInDateFilter(item.due_at, dateFilter))
+      ) {
         return false;
       }
       if (!term) return true;
@@ -217,18 +222,21 @@ export function FollowUpBoard() {
   }, [filteredItems, stages]);
 
   const calendarLeads = useMemo<Lead[]>(() => {
-    return filteredItems.map((item) => ({
-      id: item.id,
-      contactName: item.contact_name || item.business_name || "Lead",
-      businessName: item.business_name || item.contact_name || "",
-      phone: item.phone,
-      address: item.address,
-      category: followUpStageFor(item.status, stages)?.name || item.status,
-      schedule: item.due_at,
-      customerType: item.agent_name || "Follow-up",
-      notes: item.note,
-      rawItem: item,
-    }));
+    // The calendar needs a date, so prospects without a follow-up are left out
+    return filteredItems
+      .filter((item) => item.has_follow_up)
+      .map((item) => ({
+        id: item.id,
+        contactName: item.contact_name || item.business_name || "Lead",
+        businessName: item.business_name || item.contact_name || "",
+        phone: item.phone,
+        address: item.address,
+        category: followUpStageFor(item.status, stages)?.name || item.status,
+        schedule: item.due_at,
+        customerType: item.agent_name || "Follow-up",
+        notes: item.note,
+        rawItem: item,
+      }));
   }, [filteredItems, stages]);
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -307,7 +315,7 @@ export function FollowUpBoard() {
     const header = ["Follow-up Date", "Business", "Contact", "Phone", "Address", "Agent", "Status"];
     const lines = filteredItems.map((item) =>
       [
-        formatFollowUpDate(item.due_at, "yyyy-MM-dd HH:mm"),
+        item.has_follow_up ? formatFollowUpDate(item.due_at, "yyyy-MM-dd HH:mm") : "",
         item.business_name,
         item.contact_name,
         item.phone,
@@ -531,7 +539,11 @@ export function FollowUpBoard() {
         onOpenChange={(open) => {
           if (!open) setLeadDetailsItem(null);
         }}
+        onBookMeeting={(p) => setLeadAction({ type: "meeting", prospect: p })}
+        onCreateQuotation={(p) => setLeadAction({ type: "quotation", prospect: p })}
+        onCreateOrder={(p) => setLeadAction({ type: "order", prospect: p })}
       />
+      <LeadActionDialogs action={leadAction} onClose={() => setLeadAction(null)} />
     </div>
   );
 }
@@ -606,7 +618,7 @@ function FollowUpColumn({
               .slice(0, visibleCount)
               .map((item) => (
                 <FollowUpCard
-                  key={item.id}
+                  key={item.prospect_id}
                   followUp={item}
                   statusColor={stage.color}
                   isAdmin={isAdmin}

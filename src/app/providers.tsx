@@ -11,8 +11,13 @@ export function Providers({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 1000 * 60 * 2, // 2 minutes
-            refetchOnWindowFocus: false,
+            // Data goes stale quickly so changes made by other users or tabs show up
+            staleTime: 1000 * 15,
+            refetchOnWindowFocus: "always",
+            refetchOnReconnect: true,
+            // Polls every page's queries while the tab is visible; paused in background tabs
+            refetchInterval: 1000 * 30,
+            refetchIntervalInBackground: false,
           },
         },
       }),

@@ -157,6 +157,23 @@ const CRM_MODULE_DEFINITIONS: ModuleDefinition[] = navGroups.flatMap((group) =>
   })),
 );
 
+type PermColumn = "createPermId" | "editPermId" | "viewPermId" | "deletePermId";
+
+const PERM_COLUMNS: [string, PermColumn][] = [
+  ["Create", "createPermId"],
+  ["Edit", "editPermId"],
+  ["View", "viewPermId"],
+  ["Delete", "deletePermId"],
+];
+
+/** Earlier action column that uses the same permission id. One permission is one checkbox, so later columns show "same". */
+const sharedWithEarlier = (m: ModuleDefinition, column: PermColumn) => {
+  const id = m[column];
+  if (!id) return undefined;
+  const index = PERM_COLUMNS.findIndex(([, col]) => col === column);
+  return PERM_COLUMNS.slice(0, index).find(([, col]) => m[col] === id)?.[0];
+};
+
 const rowPermIds = (m: ModuleDefinition) =>
   [m.createPermId, m.editPermId, m.viewPermId, m.deletePermId].filter(Boolean) as string[];
 
@@ -746,10 +763,18 @@ function PermissionMatrixView({ role, onBack, onSaveRole, isSaving }: Permission
   const checkboxClass =
     "size-4.5 data-[state=checked]:bg-[#67B239] data-[state=checked]:border-[#67B239]";
 
-  const permCell = (id: string | undefined, label: string) => (
+  const permCell = (id: string | undefined, label: string, sharedWith?: string) => (
     // Plain call, not <PermCell />: a component defined in render remounts and drops focus
     <td key={label} className="px-2 py-2.5 text-center">
-      {id ? (
+      {id && sharedWith ? (
+        <span
+          className="text-xs text-slate-400 dark:text-slate-500"
+          aria-label={`${label}: same as ${sharedWith}`}
+          title={`Same permission as ${sharedWith}`}
+        >
+          same
+        </span>
+      ) : id ? (
         <Checkbox
           checked={selectedPermIds.includes(id)}
           onCheckedChange={() => toggleSinglePerm(id)}
@@ -884,10 +909,26 @@ function PermissionMatrixView({ role, onBack, onSaveRole, isSaving }: Permission
                         )}
                       </span>
                     </th>
-                    {permCell(m.createPermId, `Create on ${m.subModule}`)}
-                    {permCell(m.editPermId, `Edit on ${m.subModule}`)}
-                    {permCell(m.viewPermId, `View ${m.subModule}`)}
-                    {permCell(m.deletePermId, `Delete on ${m.subModule}`)}
+                    {permCell(
+                      m.createPermId,
+                      `Create on ${m.subModule}`,
+                      sharedWithEarlier(m, "createPermId"),
+                    )}
+                    {permCell(
+                      m.editPermId,
+                      `Edit on ${m.subModule}`,
+                      sharedWithEarlier(m, "editPermId"),
+                    )}
+                    {permCell(
+                      m.viewPermId,
+                      `View ${m.subModule}`,
+                      sharedWithEarlier(m, "viewPermId"),
+                    )}
+                    {permCell(
+                      m.deletePermId,
+                      `Delete on ${m.subModule}`,
+                      sharedWithEarlier(m, "deletePermId"),
+                    )}
                     <td className="px-4 py-2">
                       {area ? (
                         <div>

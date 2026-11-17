@@ -76,6 +76,8 @@ import { MeetingDetailModal } from "@/components/meeting-detail-modal";
 import { ScheduleMeetingDialog } from "@/components/schedule-meeting-dialog";
 import { EditMeetingDialog } from "@/components/edit-meeting-dialog";
 import { DeleteMeetingDialog } from "@/components/delete-meeting-dialog";
+import { MeetingCalendarView } from "@/components/meetings/meeting-calendar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DateRange } from "react-day-picker";
 import { format } from "date-fns";
 
@@ -205,6 +207,7 @@ export default function MeetingsPage() {
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
   const [calOpen, setCalOpen] = useState(false);
+  const [view, setView] = useState<"list" | "calendar">("list");
 
   const filters: MeetingFilters = {
     search,
@@ -461,223 +464,249 @@ export default function MeetingsPage() {
         </div>
       </div>
 
-      <Card className="shadow-xl border bg-card rounded-lg overflow-hidden">
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-6 w-12.5 font-semibold">SL</TableHead>
-                  <TableHead className="min-w-45 font-semibold">Title</TableHead>
-                  <TableHead className="min-w-45 font-semibold">Prospect</TableHead>
-                  <TableHead className="min-w-32.5 font-semibold">Date & Time</TableHead>
-                  <TableHead className="min-w-40 font-semibold">Location / Link</TableHead>
-                  <TableHead className="min-w-25 font-semibold">Status</TableHead>
-                  <TableHead className="min-w-40 font-semibold">Notes</TableHead>
-                  <TableHead className="min-w-25 font-semibold">SMS</TableHead>
-                  <TableHead className="pr-6 text-right min-w-20 font-semibold">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {meetingsQuery.isLoading ? (
-                  Array.from({ length: 4 }).map((_, idx) => (
-                    <TableRow key={idx}>
-                      <TableCell colSpan={9} className="py-4 px-6">
-                        <Skeleton className="h-12 w-full rounded" />
-                      </TableCell>
-                    </TableRow>
-                  ))
-                ) : meetings.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={9} className="py-12 text-center text-muted-foreground">
-                      <Calendar className="size-8 mx-auto text-slate-300 mb-2" />
-                      <p className="font-semibold text-foreground">No meetings found</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Try resetting search filters or schedule a new meeting.
-                      </p>
-                    </TableCell>
+      <Tabs value={view} onValueChange={(value) => setView(value as "list" | "calendar")}>
+        <TabsList className="bg-muted/60">
+          <TabsTrigger value="list" className="cursor-pointer">
+            List
+          </TabsTrigger>
+          <TabsTrigger value="calendar" className="cursor-pointer">
+            Calendar
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {view === "calendar" ? (
+        <MeetingCalendarView
+          meetings={meetings}
+          onSelectMeeting={(meeting) => setViewDetailMeeting(meeting)}
+        />
+      ) : (
+        <Card className="shadow-xl border bg-card rounded-lg overflow-hidden">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-6 w-12.5 font-semibold">SL</TableHead>
+                    <TableHead className="min-w-45 font-semibold">Title</TableHead>
+                    <TableHead className="min-w-45 font-semibold">Prospect</TableHead>
+                    <TableHead className="min-w-32.5 font-semibold">Date & Time</TableHead>
+                    <TableHead className="min-w-40 font-semibold">Location / Link</TableHead>
+                    <TableHead className="min-w-25 font-semibold">Status</TableHead>
+                    <TableHead className="min-w-40 font-semibold">Notes</TableHead>
+                    <TableHead className="min-w-25 font-semibold">SMS</TableHead>
+                    <TableHead className="pr-6 text-right min-w-20 font-semibold">
+                      Actions
+                    </TableHead>
                   </TableRow>
-                ) : (
-                  meetings.map((m, index) => {
-                    const TypeIcon = getTypeIcon(m.meeting_type);
-                    return (
-                      <TableRow key={m.id} className="hover:bg-muted/50 transition-colors">
-                        <TableCell className="pl-6 text-muted-foreground text-xs font-medium">
-                          {index + 1}
-                        </TableCell>
-
-                        <TableCell className="max-w-56">
-                          <button
-                            type="button"
-                            onClick={() => setViewDetailMeeting(m)}
-                            className="font-medium text-foreground text-sm hover:text-[#67B239] transition-colors truncate block max-w-full text-left cursor-pointer"
-                          >
-                            {m.title}
-                          </button>
-                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                            <TypeIcon className="size-3 text-[#67B239]" /> {m.meeting_type}
-                          </span>
-                        </TableCell>
-
-                        <TableCell className="max-w-56">
-                          <p className="font-medium text-foreground text-sm truncate">
-                            {m.business_name || m.prospect_name || "Direct Client"}
-                          </p>
-                          <p className="text-muted-foreground text-xs font-mono truncate">
-                            {m.phone || (m.business_name ? m.prospect_name : "")}
-                          </p>
-                        </TableCell>
-
-                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                          <div className="flex items-center gap-1">
-                            <Calendar className="size-3 text-slate-400" />
-                            {m.meeting_date}
-                          </div>
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <Clock3 className="size-3 text-slate-400" />
-                            {m.meeting_time}
-                          </div>
-                        </TableCell>
-
-                        <TableCell className="text-muted-foreground text-xs max-w-50 truncate">
-                          <span title={m.location || undefined}>{m.location || "N/A"}</span>
-                        </TableCell>
-
-                        <TableCell className="whitespace-nowrap">
-                          {getStatusBadge(m.status)}
-                        </TableCell>
-
-                        <TableCell className="max-w-52 text-xs">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenNotesModal(m)}
-                            className="text-left flex items-start gap-1.5 text-muted-foreground hover:text-[#67B239] transition-colors cursor-pointer"
-                            title={m.notes ? "Click to view/edit notes" : "Add notes"}
-                          >
-                            {m.notes ? (
-                              <>
-                                <FileText className="size-3.5 shrink-0 mt-0.5" />
-                                <span className="line-clamp-2 leading-snug">{m.notes}</span>
-                              </>
-                            ) : (
-                              <>
-                                <Plus className="size-3.5 shrink-0" />
-                                <span>Add Note</span>
-                              </>
-                            )}
-                          </button>
-                        </TableCell>
-
-                        <TableCell className="whitespace-nowrap">
-                          {m.sms_sent ? (
-                            <Badge
-                              variant="outline"
-                              className="bg-green-500/15 text-green-700 dark:text-green-300 border-green-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full gap-1"
-                            >
-                              <Check className="size-3 text-green-600 dark:text-green-400" /> Sent
-                            </Badge>
-                          ) : (
-                            <Badge
-                              variant="outline"
-                              className="bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full"
-                            >
-                              Pending
-                            </Badge>
-                          )}
-                        </TableCell>
-
-                        <TableCell className="pr-6 text-right whitespace-nowrap">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 rounded-full"
-                                title="Meeting Actions"
-                              >
-                                <span className="sr-only">Open menu</span>
-                                <MoreVertical className="size-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-60 p-1 rounded-[10px]">
-                              <DropdownMenuLabel className="px-2 py-1.5 text-sm font-semibold truncate">
-                                Actions for {m.title}
-                              </DropdownMenuLabel>
-                              <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
-                              <DropdownMenuGroup>
-                                <DropdownMenuItem
-                                  onClick={() => setViewDetailMeeting(m)}
-                                  className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <Eye className="mr-2 h-4 w-4" /> View Details
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => setEditingMeeting(m)}
-                                  className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <Pencil className="mr-2 h-4 w-4" /> Edit Meeting
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleOpenSmsModal(m)}
-                                  className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <Send className="mr-2 h-4 w-4" /> Send SMS Reminder
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleOpenNotesModal(m)}
-                                  className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <FileText className="mr-2 h-4 w-4" /> Notes & Agenda
-                                </DropdownMenuItem>
-                              </DropdownMenuGroup>
-                              <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
-                              <DropdownMenuGroup>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    statusMutation.mutate({ id: m.id, status: "Scheduled" })
-                                  }
-                                  className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <Clock3 className="mr-2 h-4 w-4 text-amber-600" /> Mark Scheduled
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    statusMutation.mutate({ id: m.id, status: "Completed" })
-                                  }
-                                  className="cursor-pointer text-emerald-600 focus:text-emerald-700 text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-600" /> Mark
-                                  Completed
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    statusMutation.mutate({ id: m.id, status: "Cancelled" })
-                                  }
-                                  className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
-                                >
-                                  <XCircle className="mr-2 h-4 w-4 text-destructive" /> Mark
-                                  Cancelled
-                                </DropdownMenuItem>
-                              </DropdownMenuGroup>
-                              <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
-                              <DropdownMenuItem
-                                onClick={() => handleOpenDeleteModal(m)}
-                                className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4 text-destructive" /> Delete Meeting
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                </TableHeader>
+                <TableBody>
+                  {meetingsQuery.isLoading ? (
+                    Array.from({ length: 4 }).map((_, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell colSpan={9} className="py-4 px-6">
+                          <Skeleton className="h-12 w-full rounded" />
                         </TableCell>
                       </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+                    ))
+                  ) : meetings.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={9} className="py-12 text-center text-muted-foreground">
+                        <Calendar className="size-8 mx-auto text-slate-300 mb-2" />
+                        <p className="font-semibold text-foreground">No meetings found</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Try resetting search filters or schedule a new meeting.
+                        </p>
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    meetings.map((m, index) => {
+                      const TypeIcon = getTypeIcon(m.meeting_type);
+                      return (
+                        <TableRow key={m.id} className="hover:bg-muted/50 transition-colors">
+                          <TableCell className="pl-6 text-muted-foreground text-xs font-medium tabular-nums">
+                            {index + 1}
+                          </TableCell>
+
+                          <TableCell className="max-w-56 py-3.5">
+                            <button
+                              type="button"
+                              onClick={() => setViewDetailMeeting(m)}
+                              className="font-semibold text-foreground text-sm hover:text-[#67B239] transition-colors truncate block max-w-full text-left cursor-pointer"
+                            >
+                              {m.title}
+                            </button>
+                            <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                              <TypeIcon className="size-3 text-[#67B239]" /> {m.meeting_type}
+                            </span>
+                          </TableCell>
+
+                          <TableCell className="max-w-56 py-3.5">
+                            <p className="font-medium text-foreground text-sm truncate">
+                              {m.business_name || m.prospect_name || "Direct Client"}
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground text-xs font-mono truncate">
+                              {m.phone || (m.business_name ? m.prospect_name : "")}
+                            </p>
+                          </TableCell>
+
+                          <TableCell className="whitespace-nowrap text-xs text-slate-600 dark:text-slate-300 tabular-nums">
+                            <div className="flex items-center gap-1.5">
+                              <Calendar className="size-3.5 text-slate-400" />
+                              {m.meeting_date}
+                            </div>
+                            <div className="mt-1 flex items-center gap-1.5 text-muted-foreground">
+                              <Clock3 className="size-3.5 text-slate-400" />
+                              {m.meeting_time}
+                            </div>
+                          </TableCell>
+
+                          <TableCell className="text-muted-foreground text-xs max-w-50 truncate">
+                            <span title={m.location || undefined}>{m.location || "N/A"}</span>
+                          </TableCell>
+
+                          <TableCell className="whitespace-nowrap">
+                            {getStatusBadge(m.status)}
+                          </TableCell>
+
+                          <TableCell className="max-w-52 text-xs">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenNotesModal(m)}
+                              className={
+                                m.notes
+                                  ? "text-left flex items-start gap-1.5 text-muted-foreground hover:text-[#67B239] transition-colors cursor-pointer"
+                                  : "flex items-center gap-1 rounded-md border border-dashed border-slate-300 px-2 py-1 text-slate-500 hover:border-[#67B239] hover:text-[#67B239] transition-colors cursor-pointer dark:border-slate-700"
+                              }
+                              title={m.notes ? "Click to view/edit notes" : "Add notes"}
+                            >
+                              {m.notes ? (
+                                <>
+                                  <FileText className="size-3.5 shrink-0 mt-0.5" />
+                                  <span className="line-clamp-2 leading-snug">{m.notes}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Plus className="size-3.5 shrink-0" />
+                                  <span>Add Note</span>
+                                </>
+                              )}
+                            </button>
+                          </TableCell>
+
+                          <TableCell className="whitespace-nowrap">
+                            {m.sms_sent ? (
+                              <Badge
+                                variant="outline"
+                                className="bg-green-500/15 text-green-700 dark:text-green-300 border-green-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full gap-1"
+                              >
+                                <Check className="size-3 text-green-600 dark:text-green-400" /> Sent
+                              </Badge>
+                            ) : (
+                              <Badge
+                                variant="outline"
+                                className="bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full"
+                              >
+                                Pending
+                              </Badge>
+                            )}
+                          </TableCell>
+
+                          <TableCell className="pr-6 text-right whitespace-nowrap">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 p-0 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 rounded-full"
+                                  title="Meeting Actions"
+                                >
+                                  <span className="sr-only">Open menu</span>
+                                  <MoreVertical className="size-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-60 p-1 rounded-[10px]">
+                                <DropdownMenuLabel className="px-2 py-1.5 text-sm font-semibold truncate">
+                                  Actions for {m.title}
+                                </DropdownMenuLabel>
+                                <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
+                                <DropdownMenuGroup>
+                                  <DropdownMenuItem
+                                    onClick={() => setViewDetailMeeting(m)}
+                                    className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <Eye className="mr-2 h-4 w-4" /> View Details
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => setEditingMeeting(m)}
+                                    className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <Pencil className="mr-2 h-4 w-4" /> Edit Meeting
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handleOpenSmsModal(m)}
+                                    className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <Send className="mr-2 h-4 w-4" /> Send SMS Reminder
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => handleOpenNotesModal(m)}
+                                    className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <FileText className="mr-2 h-4 w-4" /> Notes & Agenda
+                                  </DropdownMenuItem>
+                                </DropdownMenuGroup>
+                                <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
+                                <DropdownMenuGroup>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      statusMutation.mutate({ id: m.id, status: "Scheduled" })
+                                    }
+                                    className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <Clock3 className="mr-2 h-4 w-4 text-amber-600" /> Mark
+                                    Scheduled
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      statusMutation.mutate({ id: m.id, status: "Completed" })
+                                    }
+                                    className="cursor-pointer text-emerald-600 focus:text-emerald-700 text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <CheckCircle2 className="mr-2 h-4 w-4 text-emerald-600" /> Mark
+                                    Completed
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() =>
+                                      statusMutation.mutate({ id: m.id, status: "Cancelled" })
+                                    }
+                                    className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
+                                  >
+                                    <XCircle className="mr-2 h-4 w-4 text-destructive" /> Mark
+                                    Cancelled
+                                  </DropdownMenuItem>
+                                </DropdownMenuGroup>
+                                <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
+                                <DropdownMenuItem
+                                  onClick={() => handleOpenDeleteModal(m)}
+                                  className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4 text-destructive" /> Delete
+                                  Meeting
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Dialog
         open={Boolean(activeSmsMeeting)}

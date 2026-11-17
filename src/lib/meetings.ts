@@ -19,6 +19,8 @@ export type Meeting = {
   meeting_time: string;
   assigned_user_id: string | null;
   assigned_user_name?: string | undefined;
+  /** Resolved by `assigned_user_id` from profiles / users; null when the user has no photo. */
+  assigned_user_avatar?: string | null | undefined;
   notes: string | null;
   status: MeetingStatus;
   sms_sent: boolean;
@@ -98,10 +100,12 @@ export async function fetchMeetings(
         m.*,
         p.contact_name AS prospect_name,
         p.business_name,
-        u.name AS assigned_user_name
+        u.name AS assigned_user_name,
+        COALESCE(prof.avatar_url, u.avatar_url) AS assigned_user_avatar
       FROM \`meetings\` m
       LEFT JOIN \`prospects\` p ON m.prospect_id = p.id
       LEFT JOIN \`users\` u ON m.assigned_user_id = u.id
+      LEFT JOIN \`profiles\` prof ON prof.id = m.assigned_user_id
       ORDER BY m.created_at DESC, m.meeting_date DESC, m.meeting_time DESC;`,
     );
 
@@ -122,6 +126,7 @@ export async function fetchMeetings(
       meeting_time: String(item["meeting_time"] || "10:00:00"),
       assigned_user_id: (item["assigned_user_id"] as string) || null,
       assigned_user_name: (item["assigned_user_name"] as string) || undefined,
+      assigned_user_avatar: (item["assigned_user_avatar"] as string) || null,
       notes: (item["notes"] as string) || null,
       status: (item["status"] as MeetingStatus) || "Scheduled",
       sms_sent: Boolean(Number(item["sms_sent"] ?? 0)),

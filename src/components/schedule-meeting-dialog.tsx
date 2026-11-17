@@ -33,7 +33,8 @@ export type ScheduleMeetingDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   defaultProspectId?: string | undefined;
-  onSuccess?: () => void;
+  /** Gets the meeting that was saved (type, date, time, ...). */
+  onSuccess?: (meeting: Parameters<typeof createMeeting>[0]) => void;
 };
 
 export function ScheduleMeetingDialog({
@@ -111,14 +112,14 @@ export function ScheduleMeetingDialog({
 
   const createMutation = useMutation({
     mutationFn: createMeeting,
-    onSuccess: () => {
+    onSuccess: (_data, meeting) => {
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       queryClient.invalidateQueries({ queryKey: ["prospects"] });
       queryClient.invalidateQueries({ queryKey: ["prospects-stats"] });
       toast.success("Meeting scheduled successfully!");
       onOpenChange(false);
-      if (onSuccess) onSuccess();
+      if (onSuccess) onSuccess(meeting);
     },
     onError: (err: Error) => {
       toast.error(err.message || "Failed to schedule meeting.");

@@ -136,7 +136,7 @@ export function StatusOverviewCard({
           </div>
         </div>
         {!isLoading && (
-          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 sm:text-sm xl:text-base dark:bg-slate-800 dark:text-slate-300">
             {total} total
           </span>
         )}

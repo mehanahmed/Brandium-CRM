@@ -76,10 +76,7 @@ import { useAuth } from "@/lib/auth";
 import { formatCrmDate, formatCrmTime, formatCrmDateTime } from "@/lib/mysql-client";
 import { agentsQuery } from "@/lib/follow-ups";
 import { servicesQueryOptions } from "@/lib/services";
-import { useSaveQuotationMutation } from "@/lib/quotations";
-import { CreateQuotationDialog } from "@/components/quotations/create-quotation-dialog";
-import { useSaveOrderMutation } from "@/lib/orders";
-import { CreateOrderDialog } from "@/components/orders/create-order-dialog";
+import { LeadActionDialogs, type LeadAction } from "@/components/lead-action-dialogs";
 import {
   prospectsQuery,
   prospectsStatsQuery,
@@ -355,10 +352,7 @@ function ProspectsPageContent() {
   const stages = useQuery(stagesQuery());
   const agents = useQuery(agentsQuery());
   const services = useQuery(servicesQueryOptions());
-  const [quotationProspect, setQuotationProspect] = useState<Prospect | null>(null);
-  const saveQuotationMutation = useSaveQuotationMutation();
-  const [orderProspect, setOrderProspect] = useState<Prospect | null>(null);
-  const saveOrderMutation = useSaveOrderMutation();
+  const [leadAction, setLeadAction] = useState<LeadAction | null>(null);
 
   const currentPageSize = Number(searchParams.pageSize) || 12;
   const currentPage = Number(searchParams.page) || 1;
@@ -1488,12 +1482,9 @@ function ProspectsPageContent() {
           setEditProspectId(p.id);
           setEditProspectOpen(true);
         }}
-        onBookMeeting={(p) => {
-          setScheduleMeetingProspectId(p.id);
-          setScheduleMeetingOpen(true);
-        }}
-        onCreateQuotation={setQuotationProspect}
-        onCreateOrder={setOrderProspect}
+        onBookMeeting={(p) => setLeadAction({ type: "meeting", prospect: p })}
+        onCreateQuotation={(p) => setLeadAction({ type: "quotation", prospect: p })}
+        onCreateOrder={(p) => setLeadAction({ type: "order", prospect: p })}
         onStageChange={(_stageId, stageName) => {
           const normalised = stageName.toLowerCase().trim();
           if (normalised === "meeting scheduled") {
@@ -1522,49 +1513,7 @@ function ProspectsPageContent() {
         }}
       />
 
-      {quotationProspect && (
-        <CreateQuotationDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setQuotationProspect(null);
-          }}
-          services={services.data || []}
-          allQuotations={[]}
-          initial={{
-            prospectId: quotationProspect.id,
-            contactPerson: quotationProspect.contact_name || "",
-            companyName: quotationProspect.business_name || "",
-            address: quotationProspect.address || "",
-            phone: quotationProspect.phone || "",
-          }}
-          onSave={async (data) => {
-            await saveQuotationMutation.mutateAsync(data);
-            setQuotationProspect(null);
-          }}
-          isSaving={saveQuotationMutation.isPending}
-        />
-      )}
-
-      {orderProspect && (
-        <CreateOrderDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setOrderProspect(null);
-          }}
-          services={services.data || []}
-          allOrders={[]}
-          initial={{
-            companyName: orderProspect.business_name || orderProspect.contact_name || "",
-            address: orderProspect.address || "",
-            phone: orderProspect.phone || "",
-          }}
-          onSave={async (data) => {
-            await saveOrderMutation.mutateAsync(data);
-            setOrderProspect(null);
-          }}
-          isSaving={saveOrderMutation.isPending}
-        />
-      )}
+      <LeadActionDialogs action={leadAction} onClose={() => setLeadAction(null)} />
 
       <FollowUpDialog
         open={scheduleFollowUpOpen}

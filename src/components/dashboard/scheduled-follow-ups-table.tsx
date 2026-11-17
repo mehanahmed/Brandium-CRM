@@ -47,6 +47,7 @@ export function ScheduledFollowUpsTable({
     const now = Date.now();
     const today = format(new Date(), "yyyy-MM-dd");
     return items
+      .filter((item) => item.has_follow_up)
       .filter((item) => !filterUserId || [item.assigned_to, item.created_by].includes(filterUserId))
       .filter((item) => {
         // due_at is "yyyy-MM-dd HH:mm:ss", so its date part compares as a string.

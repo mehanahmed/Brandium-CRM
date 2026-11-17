@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
-import { generateUUID } from "./mysql-client";
+import { generateUUID, getMySQLTimestamp } from "./mysql-client";
 import { QUOTATION_INSERT_SQL } from "./trusted-sql";
 import { resolveStageIcon, type Stage } from "./stages";
 import { parseTerms } from "@/components/sales/terms-editor";
@@ -414,6 +414,33 @@ export const quotationsQueryOptions = (userId?: string, isAdmin: boolean = false
     staleTime: 1000 * 30,
   });
 
+/** A new quotation moves its prospect to the "Quotation Sent" stage, with a history row. */
+async function moveProspectToQuotationSent(prospectId: string, quotationId: string) {
+  const stageRes = await runMySQLQuery<Record<string, unknown>[]>(
+    "SELECT `id` FROM `stages` WHERE LOWER(TRIM(`name`)) = 'quotation sent' LIMIT 1;",
+  );
+  const stageId =
+    stageRes.success && stageRes.data?.[0] ? String(stageRes.data[0]["id"]) : "quotation-sent";
+  const currRes = await runMySQLQuery<Record<string, unknown>[]>(
+    "SELECT `stage_id` FROM `prospects` WHERE `id` = ? LIMIT 1;",
+    [prospectId],
+  );
+  const fromStageId =
+    currRes.success && currRes.data?.[0] ? String(currRes.data[0]["stage_id"] || "") || null : null;
+  const now = getMySQLTimestamp();
+  await runMySQLWrite("UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;", [
+    stageId,
+    now,
+    prospectId,
+  ]);
+  await runMySQLWrite(
+    `INSERT INTO \`prospect_stage_history\`
+       (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`note\`, \`changed_at\`)
+     VALUES (?, ?, ?, ?, ?, ?);`,
+    [generateUUID(), prospectId, fromStageId, stageId, "Quotation created", now],
+  );
+}
+
 export function useSaveQuotationMutation() {
   const queryClient = useQueryClient();
 
@@ -517,12 +544,15 @@ export function useSaveQuotationMutation() {
             id,
           ]);
         }
+        if (payload.prospect_id) await moveProspectToQuotationSent(payload.prospect_id, id);
       }
 
       return { success: true, id };
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["crm-quotations-with-stages"] });
+      queryClient.invalidateQueries({ queryKey: ["prospects"] });
+      queryClient.invalidateQueries({ queryKey: ["stage-history", variables.prospect_id] });
       toast.success(
         variables.id
           ? `Quotation "${variables.title}" updated successfully!`

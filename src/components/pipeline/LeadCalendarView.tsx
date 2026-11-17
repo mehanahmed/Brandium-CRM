@@ -63,7 +63,7 @@ const DayWithEvents = ({
       return "bg-red-100 dark:bg-red-900/30";
     }
     if (!isPastDate && dayEvents.length > 0) {
-      return "bg-green-100 dark:bg-green-900/30";
+      return "bg-[#67B239]/15 dark:bg-[#67B239]/25";
     }
     return "";
   };
@@ -74,14 +74,15 @@ const DayWithEvents = ({
         <div
           className={cn(
             "relative flex flex-col items-start justify-start p-1.5 w-full h-[120px] rounded-md transition-colors border border-border/30 shadow-xs",
-            dayEvents.length > 0 && "cursor-pointer hover:bg-accent hover:border-primary/50",
+            dayEvents.length > 0 &&
+              "cursor-pointer hover:bg-[#67B239]/10 hover:border-[#67B239]/50",
             cardBackgroundColor(),
           )}
         >
           <span
             className={cn(
-              "flex items-center justify-center text-xs h-6 w-6 rounded-full font-medium",
-              isCurrentDay ? "bg-primary text-primary-foreground font-semibold" : "",
+              "flex items-center justify-center text-xs h-6 w-6 rounded-full font-semibold",
+              isCurrentDay ? "bg-[#0a2e5c] text-white" : "text-[#0a2e5c] dark:text-slate-100",
             )}
           >
             {date.getDate()}
@@ -175,11 +176,9 @@ export function LeadCalendarView({ leads, onViewLead }: LeadCalendarViewProps) {
   }, [leads]);
 
   return (
-    <div className="p-2 sm:p-4 bg-card rounded-2xl border border-border/50 shadow-sm mt-2 flex flex-col flex-1 min-h-0 overflow-y-auto">
-      <div className="flex items-center justify-between px-2 pb-3">
-        <h2 className="text-lg font-semibold text-foreground">
-          {format(currentMonth, "MMMM yyyy")}
-        </h2>
+    <div className="p-2 sm:p-4 bg-slate-100 dark:bg-slate-900 rounded-2xl border border-border/50 shadow-sm mt-2 flex flex-col flex-1 min-h-0 overflow-y-auto">
+      <div className="-mx-2 -mt-2 mb-3 flex items-center justify-between rounded-t-2xl bg-[#67B239] px-4 py-3 sm:-mx-4 sm:-mt-4 sm:px-6">
+        <h2 className="text-lg font-semibold text-white">{format(currentMonth, "MMMM yyyy")}</h2>
         <div className="flex items-center gap-1">
           <Button
             variant="outline"
@@ -212,6 +211,9 @@ export function LeadCalendarView({ leads, onViewLead }: LeadCalendarViewProps) {
         onMonthChange={setCurrentMonth}
         mode="single"
         className="w-full"
+        classNames={{
+          weekday: "flex-1 select-none text-xs font-bold uppercase tracking-wide text-[#67B239]",
+        }}
         components={{
           Day: (props: any) => {
             const date: Date | undefined = props.date || props.day?.date;

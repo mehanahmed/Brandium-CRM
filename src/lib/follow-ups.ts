@@ -133,6 +133,8 @@ export type FollowUpStage = { id: string; name: string; color: string; group: st
 export type FollowUpBoardItem = {
   id: string;
   prospect_id: string;
+  /** False for a prospect with no scheduled follow-up; `due_at` is then "". */
+  has_follow_up: boolean;
   due_at: string;
   status: string;
   assigned_to: string | null;
@@ -196,38 +198,42 @@ export const followUpBoardQueryOptions = (userId: string | undefined, isAdmin: b
     queryKey: ["follow-ups", "board", userId, isAdmin],
     queryFn: async (): Promise<FollowUpBoardItem[]> => {
       const res = await runMySQLQuery<Record<string, unknown>[]>(
-        `SELECT h.id, h.prospect_id, h.follow_up_due_at, h.follow_up_status, h.follow_up_assigned_to,
+        // One card per active prospect. The row is its latest follow-up, or its latest
+        // stage row when it has none, so a prospect without a follow-up still shows.
+        `SELECT h.id, p.id AS prospect_id, h.follow_up_due_at, h.follow_up_status, h.follow_up_assigned_to,
                 h.changed_by, h.changed_at, h.note, p.stage_id,
                 p.contact_name, p.business_name, p.phone, p.address, p.logo_url,
                 COALESCE(prof.full_name, u.name) AS agent_name,
                 COALESCE(prof.avatar_url, u.avatar_url) AS agent_avatar,
                 COALESCE(cprof.full_name, c.name) AS creator_name,
                 COALESCE(cprof.avatar_url, c.avatar_url) AS creator_avatar
-         FROM \`prospect_stage_history\` h
-         JOIN \`prospects\` p ON p.id = h.prospect_id
+         FROM \`prospects\` p
+         LEFT JOIN \`prospect_stage_history\` h ON h.id = COALESCE(
+           (SELECT f.id FROM \`prospect_stage_history\` f WHERE f.prospect_id = p.id AND f.follow_up_due_at IS NOT NULL ORDER BY f.changed_at DESC LIMIT 1),
+           (SELECT s.id FROM \`prospect_stage_history\` s WHERE s.prospect_id = p.id ORDER BY s.changed_at DESC LIMIT 1)
+         )
          LEFT JOIN \`users\` u ON u.id = h.follow_up_assigned_to
          LEFT JOIN \`profiles\` prof ON prof.id = h.follow_up_assigned_to
          LEFT JOIN \`users\` c ON c.id = h.changed_by
          LEFT JOIN \`profiles\` cprof ON cprof.id = h.changed_by
-         WHERE h.follow_up_due_at IS NOT NULL AND (p.is_active = 1 OR p.is_active IS NULL)
-         ORDER BY h.changed_at DESC;`,
+         WHERE (p.is_active = 1 OR p.is_active IS NULL);`,
       );
       if (!res.success) throw new Error(res.error || "Failed to load follow-ups");
 
-      const seen = new Set<string>();
       const items: FollowUpBoardItem[] = [];
       for (const r of (res.data || []) as Record<string, unknown>[]) {
         const prospectId = String(r["prospect_id"]);
-        // Rows are newest first: keep only the latest follow-up per prospect
-        if (seen.has(prospectId)) continue;
-        seen.add(prospectId);
+        const hasFollowUp = !!r["follow_up_due_at"];
         const assignedTo = r["follow_up_assigned_to"] ? String(r["follow_up_assigned_to"]) : null;
         const createdBy = r["changed_by"] ? String(r["changed_by"]) : null;
-        if (!isAdmin && userId && assignedTo !== userId && createdBy !== userId) continue;
+        if (hasFollowUp && !isAdmin && userId && assignedTo !== userId && createdBy !== userId) {
+          continue;
+        }
         items.push({
-          id: String(r["id"]),
+          id: String(r["id"] || ""),
           prospect_id: prospectId,
-          due_at: String(r["follow_up_due_at"]),
+          has_follow_up: hasFollowUp,
+          due_at: hasFollowUp ? String(r["follow_up_due_at"]) : "",
           // The prospect's current pipeline stage decides the column
           status: String(r["stage_id"] || "prospect"),
           assigned_to: assignedTo,
@@ -273,7 +279,8 @@ export function useUpdateFollowUp() {
       const newDueAt = nextDue ? getMySQLTimestamp(nextDue) : null;
       const dueChanged = !!newDueAt && newDueAt.slice(0, 16) !== item.due_at.slice(0, 16);
       let historyId = item.id;
-      if (statusChanged) {
+      // A prospect with no stage history yet has no row to update, so it gets a new one
+      if (statusChanged || !item.id) {
         const now = getMySQLTimestamp();
         await runMySQLWrite(
           "UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;",
@@ -291,7 +298,7 @@ export function useUpdateFollowUp() {
             status,
             userId || null,
             now,
-            dueChanged ? newDueAt : item.due_at,
+            dueChanged ? newDueAt : item.has_follow_up ? item.due_at : null,
             item.assigned_to,
             status,
           ],
