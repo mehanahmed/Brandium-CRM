@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import mysql from "mysql2/promise";
 
 import { getMySQLConfig, getMySQLTimestamp } from "./mysql-client";
+import { MATRIX_EXTRA_PERMISSIONS } from "./permission-matrix";
 
 // In-Memory Schema Bootstrapping Cache & Concurrency Latch
 let isSchemaInitialized = false;
@@ -586,6 +587,15 @@ export async function ensureMySQLTablesExist(
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
 
+      // Admin-set order of the project (order) stages; stages without a row keep their code order
+      await conn.query(`
+      CREATE TABLE IF NOT EXISTS \`order_stage_positions\` (
+        \`stage_id\` VARCHAR(64) NOT NULL,
+        \`position\` INT NOT NULL,
+        PRIMARY KEY (\`stage_id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
       await conn.query(`
       CREATE TABLE IF NOT EXISTS \`refresh_tokens\` (
         \`id\` VARCHAR(64) NOT NULL,
@@ -721,6 +731,11 @@ export async function ensureMySQLTablesExist(
         // orders
         { table: "orders", column: "job_id", def: "VARCHAR(100) NULL" },
         { table: "orders", column: "terms", def: "LONGTEXT NULL" },
+        {
+          table: "order_stage_positions",
+          column: "is_hidden",
+          def: "TINYINT(1) NOT NULL DEFAULT 0",
+        },
         { table: "orders", column: "address", def: "TEXT NULL" },
         { table: "orders", column: "crm_user_id", def: "VARCHAR(36) NULL" },
         { table: "orders", column: "designer_id", def: "VARCHAR(36) NULL" },
@@ -902,6 +917,16 @@ export async function ensureMySQLTablesExist(
           ('perm-admin-backup', 'backup', 'admin', 'Manage database backups and exports')
         ON DUPLICATE KEY UPDATE \`description\` = VALUES(\`description\`), \`resource\` = VALUES(\`resource\`), \`action\` = VALUES(\`action\`);
       `);
+
+      // Per-box permissions of the Roles matrix (Edit / View / Delete of each page)
+      await conn.query(
+        "INSERT IGNORE INTO `permissions` (`id`, `resource`, `action`, `description`) VALUES ?",
+        [MATRIX_EXTRA_PERMISSIONS.map((p) => [p.id, p.resource, p.action, p.description])],
+      );
+      await conn.query(
+        "INSERT IGNORE INTO `role_permissions` (`role_id`, `permission_id`) VALUES ?",
+        [MATRIX_EXTRA_PERMISSIONS.map((p) => ["role-global-admin", p.id])],
+      );
 
       await conn.query(`
         INSERT IGNORE INTO \`role_permissions\` (\`role_id\`, \`permission_id\`)

@@ -6,6 +6,7 @@ import {
   ORDER_SUBMITTED_STATUS_ID,
   resolveOrderStatus,
   type CrmOrder,
+  type OrderStatus,
 } from "@/lib/orders";
 import { resolveStageColor } from "@/lib/stages";
 import type { DashboardDateRange } from "@/lib/dashboard";
@@ -149,8 +150,9 @@ export function computeOrderStatusSteps(
   allOrders: CrmOrder[],
   range: DashboardDateRange,
   userId?: string,
+  stages: OrderStatus[] = ORDER_STATUSES,
 ): TimelineStep[] {
-  const counts = new Map<string, number>(ORDER_STATUSES.map((s) => [s.id, 0]));
+  const counts = new Map<string, number>(stages.map((s) => [s.id, 0]));
   for (const order of allOrders) {
     if (userId && order.crm_user_id !== userId && order.designer_id !== userId) continue;
     if (!inRange(order.created_at, range)) continue;
@@ -158,7 +160,7 @@ export function computeOrderStatusSteps(
     const key = counts.has(id) ? id : ORDER_SUBMITTED_STATUS_ID;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return ORDER_STATUSES.map((s) => ({
+  return stages.map((s) => ({
     key: s.id,
     title: s.name,
     color: s.color,

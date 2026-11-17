@@ -2,9 +2,18 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 /** Server-side login session, kept in a signed httpOnly cookie the browser cannot read or edit. */
-export type ServerSession = { id: string; role: string; admin: boolean; exp: number };
+export type ServerSession = {
+  id: string;
+  role: string;
+  admin: boolean;
+  exp: number;
+  /** Admin id when this session is an admin "view as" of another user. */
+  viewAsBy?: string | undefined;
+};
 
 const SESSION_COOKIE = "brandium_session";
+/** Holds the admin's own signed session while an admin views as another user. */
+export const RETURN_COOKIE = "brandium_admin_return";
 const MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 
 // shortcut: without SESSION_SECRET the key is random per server start, so a restart signs
@@ -22,36 +31,54 @@ const sign = (payload: string) =>
 const isHttps = (req: Request) =>
   req.headers.get("x-forwarded-proto") === "https" || req.url.startsWith("https:");
 
-function cookieHeader(req: Request, value: string, maxAge: number) {
-  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${
+function cookieHeader(req: Request, name: string, value: string, maxAge: number) {
+  return `${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${
     isHttps(req) ? "; Secure" : ""
   }`;
+}
+
+/** Signed cookie value for a session (`payload.signature`). */
+export function signSession(session: Omit<ServerSession, "exp">): string {
+  const full: ServerSession = {
+    ...session,
+    exp: Math.floor(Date.now() / 1000) + MAX_AGE_SECONDS,
+  };
+  const payload = Buffer.from(JSON.stringify(full)).toString("base64url");
+  return `${payload}.${sign(payload)}`;
 }
 
 export function setSessionCookie(
   req: Request,
   res: NextResponse,
-  user: { id: string; role: string; admin: boolean },
+  user: { id: string; role: string; admin: boolean; viewAsBy?: string | undefined },
 ) {
-  const session: ServerSession = {
-    ...user,
-    exp: Math.floor(Date.now() / 1000) + MAX_AGE_SECONDS,
-  };
-  const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
   res.headers.append(
     "Set-Cookie",
-    cookieHeader(req, `${payload}.${sign(payload)}`, MAX_AGE_SECONDS),
+    cookieHeader(req, SESSION_COOKIE, signSession(user), MAX_AGE_SECONDS),
   );
 }
 
-export function clearSessionCookie(req: Request, res: NextResponse) {
-  res.headers.append("Set-Cookie", cookieHeader(req, "", 0));
+/** Stores an already-signed cookie value (used to hand the admin's session back). */
+export function setRawCookie(req: Request, res: NextResponse, name: string, value: string) {
+  res.headers.append("Set-Cookie", cookieHeader(req, name, value, MAX_AGE_SECONDS));
 }
 
-export function readSession(req: Request): ServerSession | null {
-  const raw = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(
-    req.headers.get("cookie") || "",
-  )?.[1];
+export function clearRawCookie(req: Request, res: NextResponse, name: string) {
+  res.headers.append("Set-Cookie", cookieHeader(req, name, "", 0));
+}
+
+export function clearSessionCookie(req: Request, res: NextResponse) {
+  clearRawCookie(req, res, SESSION_COOKIE);
+}
+
+export function readCookie(req: Request, name: string): string | null {
+  return (
+    new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.headers.get("cookie") || "")?.[1] ?? null
+  );
+}
+
+/** Checks the signature and expiry of a signed cookie value. */
+export function verifySessionValue(raw: string | null): ServerSession | null {
   const [payload, signature] = (raw || "").split(".");
   if (!payload || !signature) return null;
 
@@ -65,6 +92,10 @@ export function readSession(req: Request): ServerSession | null {
   } catch {
     return null;
   }
+}
+
+export function readSession(req: Request): ServerSession | null {
+  return verifySessionValue(readCookie(req, SESSION_COOKIE));
 }
 
 export const unauthorized = () =>

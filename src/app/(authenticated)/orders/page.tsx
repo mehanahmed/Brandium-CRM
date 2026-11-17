@@ -69,11 +69,11 @@ import { crmUsersQueryOptions, type CrmUser } from "@/lib/admin-users";
 import { servicesQueryOptions } from "@/lib/services";
 import {
   getContrastTextColor,
-  ORDER_STATUSES,
   ordersQueryOptions,
   requiresStatusReason,
   resolveOrderStatus,
   useAssignStageMutation,
+  useOrderStages,
   useDeleteOrderMutation,
   useSaveOrderMutation,
   useUpdateOrderStatusMutation,
@@ -111,6 +111,7 @@ function PersonCell({ name, avatar }: { name: string; avatar: string | null }) {
 /** Clone of ERPAPP `/orders` list, backed by MySQL `orders`. */
 export default function OrdersPage() {
   const router = useRouter();
+  const stages = useOrderStages();
   const { user, profile, isAdmin } = useAuth();
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -360,7 +361,7 @@ export default function OrdersPage() {
                                   <Hourglass className="mr-2 h-4 w-4" /> Change Status
                                 </DropdownMenuSubTrigger>
                                 <DropdownMenuSubContent className="p-1 space-y-0.5">
-                                  {ORDER_STATUSES.map((st) => (
+                                  {stages.map((st) => (
                                     <DropdownMenuItem
                                       key={st.id}
                                       onSelect={() =>

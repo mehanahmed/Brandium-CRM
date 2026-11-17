@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 
 export type User = {
   id: string;
@@ -50,8 +51,13 @@ type AuthState = {
     email: string,
     role: AppRole,
     permissions?: string[],
+    viewAs?: { adminName: string } | null,
   ) => void;
   signInAsDevUser: (name: string, email: string, role: AppRole) => void;
+  /** Name of the admin who is viewing the app as another user; null otherwise. */
+  viewAsAdminName: string | null;
+  startViewAs: (userId: string) => Promise<void>;
+  stopViewAs: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -104,6 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
+  const [viewAsAdminName, setViewAsAdminName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -117,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             profile: Profile;
             role: AppRole;
             permissions?: string[];
+            viewAs?: { adminName: string } | null;
           };
           if (parsed?.session && parsed?.role) {
             // The stored copy is for display only: the server's signed cookie decides who is
@@ -137,6 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setSession(parsed.session);
             setProfile(parsed.profile);
             setRole(parsed.role);
+            setViewAsAdminName(parsed.viewAs?.adminName ?? null);
             setPermissions(
               Array.isArray(parsed.permissions)
                 ? parsed.permissions
@@ -158,6 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     userRole: AppRole,
     userPermissions: string[] = [],
+    viewAs: { adminName: string } | null = null,
   ) => {
     const {
       user,
@@ -174,6 +184,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             profile: prof,
             role: userRole,
             permissions: userPermissions,
+            viewAs,
           }),
         );
       } catch {
@@ -185,6 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(prof);
     setRole(userRole);
     setPermissions(userPermissions);
+    setViewAsAdminName(viewAs?.adminName ?? null);
     setLoading(false);
   };
 
@@ -245,6 +257,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     setAuthenticatedDbSession,
     signInAsDevUser,
+    viewAsAdminName,
+    startViewAs: async (userId: string) => {
+      const res = await fetch("/api/admin/view-as", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const body = (await res.json().catch(() => null)) as {
+        success?: boolean;
+        error?: string;
+        user?: { id: string; name: string; email: string; role: string; permissions: string[] };
+      } | null;
+      if (!res.ok || !body?.success || !body.user) {
+        throw new Error(body?.error || "Could not view as this user.");
+      }
+      const u = body.user;
+      setAuthenticatedDbSession(u.id, u.name, u.email, u.role, u.permissions, {
+        adminName: profile?.full_name || session?.user.email || "Admin",
+      });
+      toast("Viewing Mode Active", { description: `You are now viewing as ${u.name}.` });
+      window.location.href = "/dashboard";
+    },
+    stopViewAs: async () => {
+      const res = await fetch("/api/admin/view-as", { method: "DELETE" });
+      const body = (await res.json().catch(() => null)) as {
+        success?: boolean;
+        error?: string;
+        user?: { id: string; name: string; email: string; role: string; permissions: string[] };
+      } | null;
+      if (!res.ok || !body?.success || !body.user) {
+        throw new Error(body?.error || "Could not return to admin.");
+      }
+      const u = body.user;
+      setAuthenticatedDbSession(u.id, u.name, u.email, u.role, u.permissions, null);
+      toast("Returned to Account", { description: `Logged back in as ${u.name}.` });
+      window.location.href = "/dashboard";
+    },
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -827,10 +827,38 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
   - The QueryClient used `staleTime` 2 min and no refetch on window focus, so data stayed old until a hard reload. Now `staleTime` is 15s, `refetchOnWindowFocus` is `"always"`, `refetchOnReconnect` is on, and `refetchInterval` is 30s with `refetchIntervalInBackground: false` (polling pauses in background tabs).
   - Mutations must still invalidate their own query keys; polling only covers changes made elsewhere. Do not add global polling inside a page on top of this.
 
+- **Admin "View as" a Non-Admin User (`/api/admin/view-as`)**:
+  - `POST {userId}` (admin session only) switches the signed `brandium_session` cookie to that user and stores the admin's own signed session in `brandium_admin_return` (httpOnly). `DELETE` restores the admin session after checking its signature and that it is still admin.
+  - Refused: non-admin callers, nested view-as, admin targets, inactive or deleted users. The session carries `viewAsBy`; the browser keeps `viewAs.adminName` in the stored copy and shows a banner with "Return to admin" (`AppShell`).
+  - Writes made while viewing are recorded as the target user, so use it for checking what a user sees, not for editing on their behalf.
+
+- **Assign Dialog Lists Only the Stage Role (`assign-stage-dialog.tsx`)**:
+  - The "Assign To" list shows only users whose `users.role` equals the stage's role (SW, CP, VG, VE, MK, DEV). The "Other users" group was removed. A stage with no role lists every active user.
+
+- **Project Stage Permissions Enforced on the Board (Motion Box model)**:
+  - A stage is visible to a user when they are admin or their role has `perm-pstage-<stage>` (`projects-kanban-board.tsx` `visibleStages`). Dropping a card on a stage without that permission shows "Permission Denied" and does nothing.
+  - Eye toggle: `order_stage_positions.is_hidden` hides a stage from the board for everyone (`useOrderStageSettings().hidden`). Saved with the order by `saveOrderStageSettings`.
+  - Gap: the check is client-side only. Non-admins can still write `orders.status` through `/api/mysql`. Motion Box checks on the server in `projects/actions.ts`; a server check here needs a dedicated route for stage moves.
+
+- **Admin-Set Project Stage Order (`order_stage_positions`)**:
+  - Stage order is stored in `order_stage_positions(stage_id, position)`, created in `auth.functions.ts`. `useOrderStages()` (`src/lib/orders.ts`) returns `ORDER_STATUSES` sorted by it, and unsaved stages keep code order after the saved ones.
+  - Admins reorder with the arrows on the Roles page's Project Stages tab (`saveOrderStageOrder`). The Projects board, the Orders "Change Status" menu and the dashboard Project Overview use `useOrderStages()`. The table is in `PROTECTED_TABLES`, so non-admins cannot write to it.
+  - Lookups by id (`resolveOrderStatus`, `SLA_STAGES`, the Export menu) still use the code list. Only display order is saved.
+
+- **Roles Page: Project Stages Tab (`/admin/roles`)**:
+  - The Roles page has a Roles / Project Stages switch. The Project Stages tab (`src/components/roles/project-stage-access.tsx`) is a matrix of `ORDER_STATUSES` stages by roles; a tick gives the role `perm-pstage-<stageId>`.
+  - Those permissions are seeded into `permissions` (resource `project_stage`, action = stage id) by `ensureProjectStagePermissions()` before saving, because role lists join `permissions` and would drop unknown ids.
+  - Saving sends each changed role's full permission list, since `saveRole` rewrites `role_permissions`. Sending only the stage ids would delete the role's other rights.
+  - Not enforced yet: the Projects board and stage assignment do not check these permissions. That is the next step.
+
+- **Agent Reports Leaderboard Ranks by Won Value**:
+  - Order is won value (desc), then won deals, conversion and follow-ups as tie-breakers (`compareByWon`). The podium and table use the same order, so the top 3 cards always match the table's top rows.
+
 - **Role Matrix: One Permission, One Checkbox (`/admin/roles`)**:
 
   - `PAGE_ACTIONS`' `all(id)` helper gives Create, Edit, View and Delete the same permission id on pages like Meetings, Follow-ups and Users. The matrix used to draw four checkboxes for one id, so ticking one ticked all four.
-  - `sharedWithEarlier()` makes only the first column with an id show a checkbox; later columns that reuse the id show "same". Never give two matrix columns the same id unless you want them to show as "same". To split a page's rights, give it distinct ids in `PAGE_ACTIONS` and seed them in `ensureMySQLTablesExist()`.
+  - Every Create / Edit / View / Delete box is a checkbox with its own permission id. The first box keeps the page's sidebar id (sidebar and admin pages check it); the others use `<base>-edit`, `<base>-view`, `<base>-delete` from `MATRIX_EXTRA_PERMISSIONS` (`src/lib/permission-matrix.ts`), seeded in `auth.functions.ts` and granted to `role-global-admin`.
+  - Ticking Edit or Delete records the right; code only enforces the base id today, so per-box rights are not checked by the app yet. Keep `PAGE_ACTIONS` and `MATRIX_EXTRA_PERMISSIONS` in step.
 
 - **Agent Reports Page Redesign (`/admin/agent-reports`)**:
   - Layout: header with a period switch (All time / Last 7 days / Last 30 days), four KPI cards (won, pipeline, lost, active agents), a top-3 podium and a searchable leaderboard. The agent detail popup (`AdminAgentDetailModal`) was removed per user request; the podium and rows are not clickable.

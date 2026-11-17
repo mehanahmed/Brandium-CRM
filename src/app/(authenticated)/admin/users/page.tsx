@@ -7,6 +7,7 @@ import {
   Users,
   Plus,
   Search,
+  Eye,
   PenLine,
   Trash2,
   KeyRound,
@@ -81,7 +82,7 @@ import { AdminBanUserModal } from "@/components/admin-ban-user-modal";
 
 export default function AdminUsersPage() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, startViewAs } = useAuth();
 
   const [search, setSearch] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Inactive">("Active");
@@ -415,6 +416,22 @@ export default function AdminUsersPage() {
                               >
                                 <KeyRound className="mr-2 h-4 w-4" /> Change Password
                               </DropdownMenuItem>
+                              {u.id !== user?.id && u.role !== "ADMIN" && u.status === "Active" && (
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    startViewAs(u.id).catch((err: unknown) =>
+                                      toast.error(
+                                        err instanceof Error
+                                          ? err.message
+                                          : "Could not view as this user.",
+                                      ),
+                                    );
+                                  }}
+                                  className="cursor-pointer text-sm gap-2 rounded-md px-2 py-1.5 text-blue-600 focus:text-blue-700 dark:text-blue-400"
+                                >
+                                  <Eye className="mr-2 h-4 w-4" /> View as
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuGroup>
                             <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
                             <DropdownMenuItem

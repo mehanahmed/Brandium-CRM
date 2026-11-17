@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runMySQLQuery } from "./mysql-api";
+import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
 import { generateUUID } from "./mysql-client";
 
 export type RolePermissionItem = {
@@ -393,6 +393,22 @@ export async function fetchUsersForRole(
     console.error("fetchUsersForRole error:", err);
   }
   return [];
+}
+
+/** Permission id that lets a role work on one project stage. */
+export const projectStagePermId = (stageId: string) => `perm-pstage-${stageId}`;
+
+/**
+ * Project stage permissions must exist in `permissions` (role lists join it) before a role can
+ * keep them. `(resource, action)` is unique, so each stage gets its own action name.
+ */
+export async function ensureProjectStagePermissions(stages: { id: string; name: string }[]) {
+  for (const stage of stages) {
+    await runMySQLWrite(
+      "INSERT IGNORE INTO `permissions` (`id`, `resource`, `action`, `description`) VALUES (?, 'project_stage', ?, ?);",
+      [projectStagePermId(stage.id), stage.id, `Work on the ${stage.name} project stage`],
+    );
+  }
 }
 
 export function useSaveRoleMutation() {

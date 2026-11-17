@@ -63,6 +63,11 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
+  ProjectStageAccessTab,
+  RolesViewTabs,
+  type RolesView,
+} from "@/components/roles/project-stage-access";
+import {
   rolesQueryOptions,
   permissionsQueryOptions,
   useSaveRoleMutation,
@@ -89,18 +94,20 @@ type PageActions = Pick<
   "createPermId" | "editPermId" | "viewPermId" | "deletePermId"
 >;
 
+// Each box has its own permission id: the base id for Create (or the first box), `<base>-edit`,
+// `<base>-view`, `<base>-delete` for the rest. Rows for the derived ids live in permission-matrix.ts.
 const all = (id: string): PageActions => ({
   createPermId: id,
-  editPermId: id,
-  viewPermId: id,
-  deletePermId: id,
+  editPermId: `${id}-edit`,
+  viewPermId: `${id}-view`,
+  deletePermId: `${id}-delete`,
 });
 
 // Create / Edit / View / Delete permission per page; a page not listed only has View (its sidebar permission)
 const PAGE_ACTIONS: Record<string, PageActions> = {
   "/prospects": {
     createPermId: "perm-prospects-write",
-    editPermId: "perm-prospects-write",
+    editPermId: "perm-prospects-write-edit",
     viewPermId: "perm-prospects-read",
     deletePermId: "perm-prospects-delete",
   },
@@ -108,40 +115,40 @@ const PAGE_ACTIONS: Record<string, PageActions> = {
   "/meetings": all("perm-meetings-manage"),
   "/quotations": {
     createPermId: "perm-quotations-write",
-    editPermId: "perm-quotations-write",
+    editPermId: "perm-quotations-write-edit",
     viewPermId: "perm-quotations-read",
     deletePermId: "perm-quotations-delete",
   },
   "/orders": {
     createPermId: "perm-orders-manage",
-    editPermId: "perm-orders-manage",
+    editPermId: "perm-orders-manage-edit",
     viewPermId: "perm-orders-read",
-    deletePermId: "perm-orders-manage",
+    deletePermId: "perm-orders-manage-delete",
   },
   "/projects": {
     createPermId: "perm-projects-manage",
-    editPermId: "perm-projects-manage",
+    editPermId: "perm-projects-manage-edit",
     viewPermId: "perm-projects-read",
-    deletePermId: "perm-projects-manage",
+    deletePermId: "perm-projects-manage-delete",
   },
-  "/sms/send": { createPermId: "perm-sms-send", viewPermId: "perm-sms-send" },
+  "/sms/send": { createPermId: "perm-sms-send", viewPermId: "perm-sms-send-view" },
   "/expenses": {
     createPermId: "perm-expenses-manage",
-    editPermId: "perm-expenses-manage",
+    editPermId: "perm-expenses-manage-edit",
     viewPermId: "perm-expenses-read",
-    deletePermId: "perm-expenses-manage",
+    deletePermId: "perm-expenses-manage-delete",
   },
   "/admin/users": all("perm-admin-users"),
   "/admin/roles": all("perm-admin-roles"),
   "/admin/services": {
     createPermId: "perm-services-manage",
-    editPermId: "perm-services-manage",
+    editPermId: "perm-services-manage-edit",
     viewPermId: "perm-services-read",
-    deletePermId: "perm-services-manage",
+    deletePermId: "perm-services-manage-delete",
   },
   "/admin/sms-gateway": {
     editPermId: "perm-admin-sms-gateway",
-    viewPermId: "perm-admin-sms-gateway",
+    viewPermId: "perm-admin-sms-gateway-view",
   },
   "/admin/stages": all("perm-stages-manage"),
   "/admin/data-backup": all("perm-admin-backup"),
@@ -157,28 +164,12 @@ const CRM_MODULE_DEFINITIONS: ModuleDefinition[] = navGroups.flatMap((group) =>
   })),
 );
 
-type PermColumn = "createPermId" | "editPermId" | "viewPermId" | "deletePermId";
-
-const PERM_COLUMNS: [string, PermColumn][] = [
-  ["Create", "createPermId"],
-  ["Edit", "editPermId"],
-  ["View", "viewPermId"],
-  ["Delete", "deletePermId"],
-];
-
-/** Earlier action column that uses the same permission id. One permission is one checkbox, so later columns show "same". */
-const sharedWithEarlier = (m: ModuleDefinition, column: PermColumn) => {
-  const id = m[column];
-  if (!id) return undefined;
-  const index = PERM_COLUMNS.findIndex(([, col]) => col === column);
-  return PERM_COLUMNS.slice(0, index).find(([, col]) => m[col] === id)?.[0];
-};
-
 const rowPermIds = (m: ModuleDefinition) =>
   [m.createPermId, m.editPermId, m.viewPermId, m.deletePermId].filter(Boolean) as string[];
 
 export default function AdminRolesPage() {
   const [activeView, setActiveView] = useState<"roles" | "permissions">("roles");
+  const [listTab, setListTab] = useState<RolesView>("roles");
   const [selectedRoleForPerms, setSelectedRoleForPerms] = useState<CrmRoleItem | null>(null);
 
   const [search, setSearch] = useState("");
@@ -295,6 +286,40 @@ export default function AdminRolesPage() {
     );
   }
 
+  // Project Stages tab: which roles may work on each project stage
+  if (listTab === "stages") {
+    return (
+      <div className="space-y-6 font-sans text-slate-800 dark:text-slate-200">
+        <div>
+          <h4 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Roles & Permissions
+          </h4>
+          <nav aria-label="breadcrumb" className="mt-1">
+            <ol className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+              <li className="hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer">
+                Home
+              </li>
+              <ChevronRight className="size-3 text-slate-400" />
+              <li className="font-semibold text-slate-700 dark:text-slate-300">
+                Roles & Permissions
+              </li>
+            </ol>
+          </nav>
+          <div className="mt-4">
+            <RolesViewTabs value={listTab} onChange={setListTab} />
+          </div>
+        </div>
+        <ProjectStageAccessTab
+          roles={roles}
+          onSaveRole={async (payload) => {
+            await saveRoleMutation.mutateAsync(payload);
+            refetchRoles();
+          }}
+        />
+      </div>
+    );
+  }
+
   // Roles & Permissions List View (roles-permissions.html)
   return (
     <div className="space-y-4 font-sans text-slate-800 dark:text-slate-200">
@@ -318,6 +343,9 @@ export default function AdminRolesPage() {
               </li>
             </ol>
           </nav>
+          <div className="mt-4">
+            <RolesViewTabs value={listTab} onChange={setListTab} />
+          </div>
         </div>
 
         {/* Header Right Actions */}
@@ -763,18 +791,10 @@ function PermissionMatrixView({ role, onBack, onSaveRole, isSaving }: Permission
   const checkboxClass =
     "size-4.5 data-[state=checked]:bg-[#67B239] data-[state=checked]:border-[#67B239]";
 
-  const permCell = (id: string | undefined, label: string, sharedWith?: string) => (
+  const permCell = (id: string | undefined, label: string) => (
     // Plain call, not <PermCell />: a component defined in render remounts and drops focus
     <td key={label} className="px-2 py-2.5 text-center">
-      {id && sharedWith ? (
-        <span
-          className="text-xs text-slate-400 dark:text-slate-500"
-          aria-label={`${label}: same as ${sharedWith}`}
-          title={`Same permission as ${sharedWith}`}
-        >
-          same
-        </span>
-      ) : id ? (
+      {id ? (
         <Checkbox
           checked={selectedPermIds.includes(id)}
           onCheckedChange={() => toggleSinglePerm(id)}
@@ -909,26 +929,10 @@ function PermissionMatrixView({ role, onBack, onSaveRole, isSaving }: Permission
                         )}
                       </span>
                     </th>
-                    {permCell(
-                      m.createPermId,
-                      `Create on ${m.subModule}`,
-                      sharedWithEarlier(m, "createPermId"),
-                    )}
-                    {permCell(
-                      m.editPermId,
-                      `Edit on ${m.subModule}`,
-                      sharedWithEarlier(m, "editPermId"),
-                    )}
-                    {permCell(
-                      m.viewPermId,
-                      `View ${m.subModule}`,
-                      sharedWithEarlier(m, "viewPermId"),
-                    )}
-                    {permCell(
-                      m.deletePermId,
-                      `Delete on ${m.subModule}`,
-                      sharedWithEarlier(m, "deletePermId"),
-                    )}
+                    {permCell(m.createPermId, `Create on ${m.subModule}`)}
+                    {permCell(m.editPermId, `Edit on ${m.subModule}`)}
+                    {permCell(m.viewPermId, `View ${m.subModule}`)}
+                    {permCell(m.deletePermId, `Delete on ${m.subModule}`)}
                     <td className="px-4 py-2">
                       {area ? (
                         <div>

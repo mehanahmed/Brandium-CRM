@@ -36,6 +36,7 @@ import {
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useAuth } from "@/lib/auth";
 import { navGroups } from "@/lib/nav";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Link } from "@/components/navigation-link";
 
@@ -166,7 +167,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountDialog, setAccountDialog] = useState<"name" | "avatar" | "password" | null>(null);
-  const { profile, user, role, signOut } = useAuth();
+  const { profile, user, role, signOut, viewAsAdminName, stopViewAs } = useAuth();
 
   const { data: usersList } = useQuery(crmUsersQueryOptions());
   const currentUserRecord = usersList?.find(
@@ -418,6 +419,39 @@ export function AppShell({ children }: { children: ReactNode }) {
             </DropdownMenu>
           </div>
         </header>
+
+        {viewAsAdminName && (
+          <div
+            role="status"
+            className="sticky top-14 z-20 flex flex-col items-center justify-center gap-1.5 border-b border-primary/20 bg-primary/10 px-3 py-1.5 text-center backdrop-blur-md sm:flex-row sm:gap-4 sm:px-4 sm:py-2"
+          >
+            <p className="flex flex-wrap items-center justify-center gap-1.5 text-xs font-medium text-primary sm:gap-2 sm:text-sm">
+              <span className="relative flex h-2 w-2 shrink-0">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75"></span>
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-primary"></span>
+              </span>
+              <span>
+                Currently viewing as{" "}
+                <span className="font-bold underline">
+                  {profile?.full_name || user?.email || "user"}
+                </span>{" "}
+                ({(role || "user").replace(/_/g, " ").toUpperCase()})
+              </span>
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                stopViewAs().catch((err: unknown) =>
+                  toast.error(err instanceof Error ? err.message : "Could not return to admin."),
+                );
+              }}
+              className="h-6 shrink-0 rounded border-none bg-primary px-2.5 text-xs text-primary-foreground hover:bg-primary/90 sm:h-7 sm:px-3"
+            >
+              Return to My Account ({viewAsAdminName})
+            </Button>
+          </div>
+        )}
 
         <main className="flex-1 p-4 md:p-6">{children}</main>
 

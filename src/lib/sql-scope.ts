@@ -13,7 +13,7 @@ import { escape } from "mysql2";
 export class SqlScopeError extends Error {}
 
 const PROTECTED_TABLES =
-  /\b(users|user_roles|roles|permissions|role_permissions|sms_gateway_settings|sessions)\b/i;
+  /\b(users|user_roles|roles|permissions|role_permissions|sms_gateway_settings|sessions|order_stage_positions)\b/i;
 // Word boundary, not whitespace: `UPDATE`users`` and `UPDATE/**/users` are writes too
 const WRITE_SQL = /\b(insert|update|delete|replace)\b/i;
 const ADMIN_ONLY_SQL =

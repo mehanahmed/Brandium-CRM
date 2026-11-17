@@ -62,8 +62,12 @@ const getInitials = (name: string) =>
 const formatCurrency = (amount: number) =>
   `৳${Number(amount || 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
 
-const rankScore = (agent: AgentMetrics) =>
-  agent.won_value + agent.conversion_rate * 10000 + agent.followups_completed * 5000;
+// Highest won value first; ties go to more won deals, then conversion, then follow-ups
+const compareByWon = (a: AgentMetrics, b: AgentMetrics) =>
+  b.won_value - a.won_value ||
+  b.sales_won - a.sales_won ||
+  b.conversion_rate - a.conversion_rate ||
+  b.followups_completed - a.followups_completed;
 
 export default function AdminAgentReportsPage() {
   const [period, setPeriod] = useState<AgentReportPeriod>("overview");
@@ -73,7 +77,7 @@ export default function AdminAgentReportsPage() {
   const overall = data?.overall;
   const agents = useMemo(() => data?.agents ?? [], [data]);
 
-  const ranked = useMemo(() => [...agents].sort((a, b) => rankScore(b) - rankScore(a)), [agents]);
+  const ranked = useMemo(() => [...agents].sort(compareByWon), [agents]);
 
   const query = search.trim().toLowerCase();
   const visible = useMemo(
@@ -201,7 +205,7 @@ export default function AdminAgentReportsPage() {
                 <span className="font-normal text-muted-foreground">({visible.length})</span>
               </h2>
               <p className="text-xs text-muted-foreground">
-                Ranked by won value, conversion and follow-ups. Click a row for details.
+                Ranked by won value. Ties are broken by won deals, then conversion.
               </p>
             </div>
             <div className="relative w-full sm:w-72">

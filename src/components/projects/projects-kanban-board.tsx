@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { endOfDay, format, startOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
+import { projectStagePermId } from "@/lib/roles";
 import {
   DndContext,
   MouseSensor,
@@ -63,6 +64,8 @@ import { crmUsersQueryOptions, type CrmUser } from "@/lib/admin-users";
 import {
   ORDER_STATUSES,
   ORDER_SUBMITTED_STATUS_ID,
+  useOrderStages,
+  useOrderStageSettings,
   ordersQueryOptions,
   requiresStatusReason,
   resolveOrderStatus,
@@ -138,7 +141,19 @@ const restrictToBoard: Modifier = ({ transform, draggingNodeRect }) => {
 
 /** Clone of ERPAPP `ProjectsKanbanClient2.tsx`: every order is a card in its stage column. */
 export function ProjectsKanbanBoard() {
-  const { user, profile, isAdmin } = useAuth();
+  const stages = useOrderStages();
+  const { user, profile, isAdmin, permissions } = useAuth();
+  const stageSettings = useOrderStageSettings();
+  // Columns this user may see: not hidden, and (admins, or the role has the stage permission)
+  const visibleStages = useMemo(
+    () =>
+      stages.filter(
+        (stage) =>
+          !stageSettings.hidden.includes(stage.id) &&
+          (isAdmin || permissions.includes(projectStagePermId(stage.id))),
+      ),
+    [stages, stageSettings, isAdmin, permissions],
+  );
   const seesAllOrders = useSeesAllData("orders");
   const {
     data: ordersData,
@@ -225,7 +240,7 @@ export function ProjectsKanbanBoard() {
 
   const ordersByStatus = useMemo(() => {
     const grouped: Record<string, CrmOrder[]> = {};
-    ORDER_STATUSES.forEach((s) => (grouped[s.id] = []));
+    stages.forEach((s) => (grouped[s.id] = []));
     // Starred first (most stars), then newest stage entry first — like ERPAPP
     const sorted = [...filteredOrders].sort((a, b) => {
       if (a.is_starred !== b.is_starred) return b.is_starred - a.is_starred;
@@ -233,12 +248,18 @@ export function ProjectsKanbanBoard() {
     });
     sorted.forEach((order) => grouped[columnIdFor(order)]?.push(order));
     return grouped;
-  }, [filteredOrders]);
+  }, [filteredOrders, stages]);
 
   const handleDropOrder = (orderId: string, statusId: string) => {
     setActiveOrder(null);
     const order = orders.find((o) => o.id === orderId);
     if (!order || columnIdFor(order) === statusId) return;
+    if (!isAdmin && !permissions.includes(projectStagePermId(statusId))) {
+      toast.error("Permission Denied", {
+        description: `You do not have permission to move projects to the '${resolveOrderStatus(statusId).name}' stage.`,
+      });
+      return;
+    }
     const target = resolveOrderStatus(statusId);
     if (target.assignable) {
       setStageAssign({ order, statusId });
@@ -427,7 +448,7 @@ export function ProjectsKanbanBoard() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel>Select Stage to Export</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {ORDER_STATUSES.map((stage) => {
+              {stages.map((stage) => {
                 const Icon = STAGE_ICONS[stage.id] || ClipboardCheck;
                 return (
                   <DropdownMenuItem
@@ -455,7 +476,7 @@ export function ProjectsKanbanBoard() {
       >
         <div className="flex-1 min-h-0 overflow-x-auto pb-4 custom-scrollbar">
           <div className="flex space-x-4 h-full min-w-max">
-            {ORDER_STATUSES.map((stage) => (
+            {visibleStages.map((stage) => (
               <KanbanColumn
                 key={stage.id}
                 id={stage.id}

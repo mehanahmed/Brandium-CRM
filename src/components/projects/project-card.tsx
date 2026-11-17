@@ -66,7 +66,9 @@ interface ProgressInfo {
  * working stages; otherwise each stage gets DEFAULT_STAGE_SLA_HOURS.
  */
 const calculateProgressInfo = (order: CrmOrder, now: Date): ProgressInfo => {
-  const deadline = getStageDeadline(order);
+  // A canceled order has no running SLA, so it shows no progress bar
+  const deadline =
+    resolveOrderStatus(order.status).id === "canceled" ? null : getStageDeadline(order);
   if (!deadline) {
     const deliveredAt = getStageStartedAt(order);
     return {

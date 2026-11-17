@@ -48,6 +48,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { crmUsersQueryOptions } from "@/lib/admin-users";
 import { useAuth } from "@/lib/auth";
 import { dashboardMetricsQuery, type DashboardDateRange } from "@/lib/dashboard";
+import { useOrderStages } from "@/lib/orders";
 import {
   computeDeliveredCount,
   computeFinanceSummary,
@@ -97,6 +98,7 @@ export default function DashboardPage() {
     enabled: Boolean(userId),
   });
 
+  const orderStages = useOrderStages();
   const ordersQuery = useQuery({
     ...ordersQueryOptions(userId, isAdmin),
     enabled: Boolean(userId),
@@ -112,7 +114,12 @@ export default function DashboardPage() {
     ...dashboardActivityCountsQuery(range, isAdmin ? filterUserId : userId),
     enabled: Boolean(userId),
   });
-  const projectSteps = computeOrderStatusSteps(ordersQuery.data ?? [], range, filterUserId);
+  const projectSteps = computeOrderStatusSteps(
+    ordersQuery.data ?? [],
+    range,
+    filterUserId,
+    orderStages,
+  );
   const pipelineQuery = useQuery({
     ...prospectStageStepsQuery(range, isAdmin ? filterUserId : userId),
     enabled: Boolean(userId),

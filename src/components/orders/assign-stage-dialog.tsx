@@ -65,13 +65,17 @@ export function AssignStageDialog({
     () => users.filter((u) => !u.is_deleted && (u.status || "Active") !== "Deleted"),
     [users],
   );
-  // People with this stage's short role (e.g. SW for Script Writer) are listed first
+  // Only people with this stage's short role (e.g. SW for Script Writer) can be assigned.
+  // Stages without a role (no stage team) list every active user.
   const stageRole = stage.role?.toUpperCase();
-  const stageTeam = designerReps.filter(
-    (u) => stageRole && (u.role || "").toUpperCase() === stageRole,
+  const stageTeam = useMemo(
+    () =>
+      stageRole
+        ? designerReps.filter((u) => (u.role || "").toUpperCase() === stageRole)
+        : designerReps,
+    [designerReps, stageRole],
   );
-  const otherUsers = designerReps.filter((u) => !stageTeam.includes(u));
-  const selected = designerReps.find((dr) => dr.id === selectedDrId);
+  const selected = stageTeam.find((dr) => dr.id === selectedDrId);
 
   const renderUser = (dr: CrmUser) => (
     <CommandItem
@@ -124,7 +128,7 @@ export function AssignStageDialog({
                     role="combobox"
                     aria-expanded={isPopoverOpen}
                     className="w-full justify-between"
-                    disabled={designerReps.length === 0}
+                    disabled={stageTeam.length === 0}
                   >
                     <span className="truncate">
                       {selected ? selected.name : "Select a user..."}
@@ -137,21 +141,15 @@ export function AssignStageDialog({
                     <CommandInput placeholder="Search user..." />
                     <CommandList>
                       <CommandEmpty>No user found.</CommandEmpty>
-                      {stageRole && (
-                        <CommandGroup heading={`${stage.name} (${stageRole})`}>
-                          {stageTeam.length > 0 ? (
-                            stageTeam.map(renderUser)
-                          ) : (
-                            <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                              No user has the {stageRole} role yet. Set it in Users.
-                            </p>
-                          )}
-                        </CommandGroup>
-                      )}
-                      {otherUsers.length > 0 && (
-                        <CommandGroup heading={stageRole ? "Other users" : undefined}>
-                          {otherUsers.map(renderUser)}
-                        </CommandGroup>
+                      <CommandGroup
+                        heading={stageRole ? `${stage.name} (${stageRole})` : undefined}
+                      >
+                        {stageTeam.map(renderUser)}
+                      </CommandGroup>
+                      {stageRole && stageTeam.length === 0 && (
+                        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                          No user has the {stageRole} role yet. Set it in Users.
+                        </p>
                       )}
                     </CommandList>
                   </Command>

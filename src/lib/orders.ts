@@ -1,4 +1,5 @@
-import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { toast } from "sonner";
 import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
 import { generateUUID } from "./mysql-client";
@@ -40,6 +41,70 @@ export const ORDER_STATUSES: OrderStatus[] = [
   { id: "delivered", name: "Delivered", color: "#16A34A" },
   { id: "canceled", name: "Canceled", color: "#EF4444" },
 ];
+
+/**
+ * Stages in the admin's order. Stages without a saved position keep their code order and go after
+ * the saved ones. `ORDER_STATUSES` stays the code default; lookups by id do not depend on order.
+ */
+export const applyStageOrder = (
+  stages: OrderStatus[],
+  positions: Record<string, number>,
+): OrderStatus[] =>
+  stages
+    .map((stage, index) => ({ stage, key: positions[stage.id] ?? 1000 + index }))
+    .sort((a, b) => a.key - b.key)
+    .map((item) => item.stage);
+
+export type OrderStageSettings = { positions: Record<string, number>; hidden: string[] };
+
+const EMPTY_STAGE_SETTINGS: OrderStageSettings = { positions: {}, hidden: [] };
+
+export async function fetchOrderStageSettings(): Promise<OrderStageSettings> {
+  const res = await runMySQLQuery<Record<string, unknown>[]>(
+    "SELECT `stage_id`, `position`, `is_hidden` FROM `order_stage_positions`;",
+  );
+  const settings: OrderStageSettings = { positions: {}, hidden: [] };
+  for (const row of (res.data || []) as Record<string, unknown>[]) {
+    const id = String(row["stage_id"]);
+    settings.positions[id] = Number(row["position"]);
+    if (Number(row["is_hidden"] || 0) === 1) settings.hidden.push(id);
+  }
+  return settings;
+}
+
+export const orderStageOrderQueryOptions = () =>
+  queryOptions({
+    queryKey: ["order-stage-order"],
+    queryFn: fetchOrderStageSettings,
+  });
+
+/** Saved stage order and hidden stages; empty until the query loads. */
+export function useOrderStageSettings(): OrderStageSettings {
+  const { data } = useQuery(orderStageOrderQueryOptions());
+  return data ?? EMPTY_STAGE_SETTINGS;
+}
+
+/** Project stages in the saved order; code order until the query loads. */
+export function useOrderStages(): OrderStatus[] {
+  const settings = useOrderStageSettings();
+  return useMemo(() => applyStageOrder(ORDER_STATUSES, settings.positions), [settings]);
+}
+
+/**
+ * Saves the stage order (position = index in `stageIds`) and which stages are hidden from the
+ * board. Admin only: the table is protected in sql-scope.ts.
+ */
+export async function saveOrderStageSettings(
+  stageIds: string[],
+  hiddenIds: string[],
+): Promise<void> {
+  for (const [position, stageId] of stageIds.entries()) {
+    await runMySQLWrite(
+      "INSERT INTO `order_stage_positions` (`stage_id`, `position`, `is_hidden`) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE `position` = VALUES(`position`), `is_hidden` = VALUES(`is_hidden`);",
+      [stageId, position, hiddenIds.includes(stageId) ? 1 : 0],
+    );
+  }
+}
 
 /** Stages that run on the clock; Delivered has no SLA. */
 export const SLA_STAGES = ORDER_STATUSES.filter((s) => s.id !== "delivered");
