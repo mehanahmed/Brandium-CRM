@@ -1,6 +1,6 @@
 import { format } from "date-fns";
 import JsBarcode from "jsbarcode";
-import { BRANDIUM_TERMS } from "@/components/invoices/torn-paper-terms";
+import { resolveOrderTerms } from "@/lib/orders";
 import type { CrmOrder } from "@/lib/orders";
 
 /** Everything the shared order / quotation PDF needs, already formatted for display. */
@@ -186,13 +186,13 @@ export function orderToPdfData(order: CrmOrder): SalesPdfData {
     notesTitle: "Order Notes:",
     notes: order.notes,
     payments: payments.map((p) => ({
-      date: formatPdfDate(p.date, false),
+      date: formatPdfDate(p.date),
       amount: formatBdt(p.amount),
       method: p.paymentMethod || "N/A",
       notes: p.notes || "N/A",
       recordedBy: p.recordedByUserName || "N/A",
     })),
-    terms: BRANDIUM_TERMS,
+    terms: resolveOrderTerms(order),
     totals,
     amountDue: !isPaid && grandTotal > 0 && due > 0.01 ? formatBdt(due) : null,
     isPaid,

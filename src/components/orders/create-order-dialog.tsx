@@ -19,6 +19,8 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { generateUUID } from "@/lib/mysql-client";
 import { useAuth } from "@/lib/auth";
+import { BRANDIUM_TERMS } from "@/components/invoices/torn-paper-terms";
+import { TermsEditor, termsToSave } from "@/components/sales/terms-editor";
 import type { CrmOrder, SaveOrderPayload } from "@/lib/orders";
 import type { AdvancePaymentRecord } from "@/lib/projects";
 import {
@@ -43,6 +45,8 @@ interface CreateOrderDialogProps {
   allOrders: CrmOrder[];
   onSave: (data: SaveOrderPayload) => Promise<void>;
   isSaving: boolean;
+  /** Prefill from a lead (e.g. opened from the Lead Details dialog). */
+  initial?: { companyName: string; address: string; phone: string } | undefined;
 }
 
 export const toOrderLineItems = (items: DialogLineItem[]) =>
@@ -63,17 +67,20 @@ export function CreateOrderDialog({
   allOrders,
   onSave,
   isSaving,
+  initial,
 }: CreateOrderDialogProps) {
   const { user, profile } = useAuth();
 
   const [jobId, setJobId] = useState("");
-  const [companyName, setCompanyName] = useState("");
-  const [address, setAddress] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [companyName, setCompanyName] = useState(initial?.companyName ?? "");
+  const [address, setAddress] = useState(initial?.address ?? "");
+  const [phoneNumber, setPhoneNumber] = useState(initial?.phone ?? "");
   const [currentOrderDate, setCurrentOrderDate] = useState<Date | undefined>(new Date());
   const [acceptedDeliveryDate, setAcceptedDeliveryDate] = useState<Date | undefined>(undefined);
   const [isStarred, setIsStarred] = useState(0);
   const [orderNotes, setOrderNotes] = useState("");
+  // One term per line; new documents start from the default list
+  const [termsText, setTermsText] = useState(() => BRANDIUM_TERMS.join("\n"));
   const [orderItems, setOrderItems] = useState<DialogLineItem[]>(() => [createEmptyItem()]);
   const [specialClientDiscount, setSpecialClientDiscount] = useState("");
   const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
@@ -213,6 +220,7 @@ export function CreateOrderDialog({
       advance_payments: advancePayments,
       is_starred: isStarred,
       notes: orderNotes.trim() || null,
+      terms: termsToSave(termsText),
       order_date: toMySQLDateTime(currentOrderDate),
       delivery_date: acceptedDeliveryDate ? toMySQLDateTime(acceptedDeliveryDate) : null,
       changed_by_name: profile?.full_name || "Admin",
@@ -465,6 +473,14 @@ export function CreateOrderDialog({
                 </span>
               </div>
             </div>
+
+            <TermsEditor
+              id="create-orderTerms"
+              value={termsText}
+              onChange={setTermsText}
+              disabled={isSaving}
+              documentLabel="order"
+            />
           </div>
           <DialogFooter className="pt-3 sm:pt-4 border-t flex flex-col-reverse sm:flex-row gap-2">
             <Button

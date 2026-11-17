@@ -2,7 +2,9 @@
 
 import { format } from "date-fns";
 import {
+  ArrowRight,
   CalendarDays,
+  Eye,
   MapPin,
   MessageSquarePlus,
   MoreVertical,
@@ -11,6 +13,7 @@ import {
   Trash2,
   User as UserIcon,
 } from "lucide-react";
+import { useDraggable } from "@dnd-kit/core";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,11 +22,14 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { getInitials } from "@/components/orders/assign-stage-dialog";
-import type { FollowUpBoardItem } from "@/lib/follow-ups";
+import { followUpStageFor, type FollowUpBoardItem, type FollowUpStage } from "@/lib/follow-ups";
 import { parseNotesToItems } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 
@@ -38,54 +44,80 @@ export const formatFollowUpDate = (value: string, pattern: string) => {
 interface FollowUpCardProps {
   followUp: FollowUpBoardItem;
   statusColor: string;
-  isDragging: boolean;
+  isOverlay?: boolean;
   isAdmin: boolean;
-  onDragStart: (item: FollowUpBoardItem) => void;
-  onDragEnd: () => void;
-  onAddUpdate: (item: FollowUpBoardItem) => void;
-  onViewTimeline: (item: FollowUpBoardItem) => void;
-  onDelete: (item: FollowUpBoardItem) => void;
+  stages?: FollowUpStage[];
+  onMoveToStage?: (item: FollowUpBoardItem, stage: FollowUpStage) => void;
+  onAddUpdate?: (item: FollowUpBoardItem) => void;
+  onViewDetails?: ((item: FollowUpBoardItem) => void) | undefined;
+  onDelete?: (item: FollowUpBoardItem) => void;
 }
 
-/** Clone of ERPAPP `FollowUpCard.tsx`, using native HTML5 drag-and-drop. */
+/** Robust Kanban card using @dnd-kit/core and Motion Box architecture. */
 export function FollowUpCard({
   followUp,
   statusColor,
-  isDragging,
+  isOverlay = false,
   isAdmin,
-  onDragStart,
-  onDragEnd,
+  stages,
+  onMoveToStage,
   onAddUpdate,
-  onViewTimeline,
+  onViewDetails,
   onDelete,
 }: FollowUpCardProps) {
   const displayName = followUp.business_name || followUp.contact_name || "Unnamed prospect";
   const latestNote = parseNotesToItems(followUp.note).at(-1)?.text || "";
 
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: followUp.id,
+    data: { followUp },
+    disabled: isOverlay,
+  });
+
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", followUp.id);
-        e.dataTransfer.effectAllowed = "move";
-        onDragStart(followUp);
-      }}
-      onDragEnd={onDragEnd}
-      className={cn("relative group w-full transition-opacity", isDragging && "opacity-40")}
+      ref={!isOverlay ? setNodeRef : null}
+      {...(!isOverlay ? { ...attributes, ...listeners } : {})}
+      className={cn(
+        "relative group w-full select-none transition-all duration-150",
+        !isOverlay && isDragging && "opacity-40",
+        isOverlay && "cursor-grabbing shadow-2xl scale-105 rotate-1 z-10 pointer-events-none",
+      )}
     >
       <Card
         className={cn(
-          "bg-card w-full shadow-xs cursor-grab active:cursor-grabbing",
-          isDragging && "ring-2 ring-[#67B239]",
+          "bg-card w-full shadow-xs transition-shadow",
+          !isOverlay && "cursor-grab active:cursor-grabbing hover:shadow-md",
+          isOverlay && "ring-2 ring-[#67B239] shadow-2xl bg-card/95 backdrop-blur-sm",
         )}
       >
         <CardContent className="p-3 space-y-2.5">
-          <h3
-            className="text-sm font-semibold text-foreground group-hover:text-[#67B239] transition-colors"
-            title={displayName}
+          <div
+            className="flex items-center gap-2.5 min-w-0 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!isOverlay && onViewDetails) {
+                onViewDetails(followUp);
+              }
+            }}
           >
-            {truncate(displayName, 22)}
-          </h3>
+            <Avatar className="size-7 rounded-full shrink-0 border border-slate-200/80 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 shadow-2xs overflow-hidden">
+              <AvatarImage
+                src={followUp.logo_url || undefined}
+                alt={displayName}
+                className="size-full object-cover rounded-full"
+              />
+              <AvatarFallback className="text-[10px] font-bold bg-[#67B239]/10 text-[#55962e] uppercase">
+                {getInitials(displayName)}
+              </AvatarFallback>
+            </Avatar>
+            <h3
+              className="text-sm font-semibold text-foreground group-hover:text-[#67B239] transition-colors flex-1 truncate"
+              title={displayName}
+            >
+              {truncate(displayName, 24)}
+            </h3>
+          </div>
 
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-[11px] text-muted-foreground font-medium min-w-0">
@@ -100,6 +132,7 @@ export function FollowUpCard({
                 <a
                   href={`tel:${followUp.phone}`}
                   onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
                   className="hover:text-[#67B239]"
                 >
                   {followUp.phone}
@@ -133,7 +166,10 @@ export function FollowUpCard({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <div className="h-7 w-7 shrink-0 rounded-lg bg-muted/30 flex items-center justify-center cursor-help border border-border/40">
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="h-7 w-7 shrink-0 rounded-lg bg-muted/30 flex items-center justify-center cursor-help border border-border/40"
+                    >
                       <MapPin className="h-3.5 w-3.5 text-[#67B239]" />
                     </div>
                   </TooltipTrigger>
@@ -174,43 +210,82 @@ export function FollowUpCard({
                 {followUp.agent_name}
               </span>
             </div>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Follow-up actions"
-                  className="h-8 w-8 rounded-lg text-muted-foreground hover:text-[#67B239] hover:bg-[#67B239]/5 cursor-pointer"
-                >
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={() => onAddUpdate(followUp)} className="cursor-pointer">
-                  <MessageSquarePlus className="h-4 w-4" />
-                  Add Update
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => onViewTimeline(followUp)}
-                  className="cursor-pointer"
-                >
-                  <StickyNote className="h-4 w-4" />
-                  View Timeline
-                </DropdownMenuItem>
-                {isAdmin && (
-                  <>
-                    <DropdownMenuSeparator />
+            {!isOverlay && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Follow-up actions"
+                    className="h-8 w-8 rounded-lg text-muted-foreground hover:text-[#67B239] hover:bg-[#67B239]/5 cursor-pointer"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  {stages && stages.length > 0 && onMoveToStage && (
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger className="cursor-pointer">
+                        <ArrowRight className="h-4 w-4 mr-2 text-[#67B239]" />
+                        Move to Stage
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="w-44">
+                        {stages.map((stg) => {
+                          const isCurrent =
+                            followUpStageFor(followUp.status, stages)?.id === stg.id;
+                          return (
+                            <DropdownMenuItem
+                              key={stg.id}
+                              disabled={isCurrent}
+                              onClick={() => onMoveToStage(followUp, stg)}
+                              className="cursor-pointer flex items-center gap-2"
+                            >
+                              <span
+                                className="size-2 rounded-full shrink-0"
+                                style={{ backgroundColor: stg.color }}
+                              />
+                              <span className={cn(isCurrent && "font-semibold")}>{stg.name}</span>
+                            </DropdownMenuItem>
+                          );
+                        })}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  )}
+                  {onAddUpdate && (
                     <DropdownMenuItem
-                      onClick={() => onDelete(followUp)}
-                      className="cursor-pointer text-destructive focus:text-destructive"
+                      onClick={() => onAddUpdate(followUp)}
+                      className="cursor-pointer"
                     >
-                      <Trash2 className="h-4 w-4" />
-                      Delete Record
+                      <MessageSquarePlus className="h-4 w-4" />
+                      Add Update
                     </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => {
+                      if (onViewDetails) onViewDetails(followUp);
+                    }}
+                    className="cursor-pointer"
+                  >
+                    <Eye className="h-4 w-4 mr-2 text-[#67B239]" />
+                    View Details
+                  </DropdownMenuItem>
+                  {isAdmin && onDelete && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => onDelete(followUp)}
+                        className="cursor-pointer text-destructive focus:text-destructive"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Delete Record
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         </CardContent>
       </Card>

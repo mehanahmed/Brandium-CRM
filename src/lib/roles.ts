@@ -29,54 +29,194 @@ export type SaveRolePayload = {
   permission_ids: string[];
 };
 
-const DEFAULT_SYSTEM_PERMISSIONS: RolePermissionItem[] = [
+export type AssignedRoleUser = {
+  id: string;
+  name: string;
+  email: string;
+  avatar_url?: string | null;
+  status: string;
+};
+
+export const DEFAULT_SYSTEM_PERMISSIONS: RolePermissionItem[] = [
+  // Prospects
   {
-    id: "perm-p-view",
+    id: "perm-prospects-read",
     resource: "prospects",
-    action: "view",
-    description: "View list of prospects and leads",
+    action: "read",
+    description: "View prospects and lead records",
   },
   {
-    id: "perm-p-create",
+    id: "perm-prospects-write",
     resource: "prospects",
-    action: "create",
-    description: "Add new prospects to CRM",
+    action: "write",
+    description: "Create and update prospects",
   },
   {
-    id: "perm-p-edit",
-    resource: "prospects",
-    action: "edit",
-    description: "Edit contact info and stages",
-  },
-  {
-    id: "perm-p-delete",
+    id: "perm-prospects-delete",
     resource: "prospects",
     action: "delete",
-    description: "Soft-delete or remove prospects",
+    description: "Delete and manage prospects",
   },
   {
-    id: "perm-b-view",
-    resource: "billing",
-    action: "view",
-    description: "View invoices and payment receipts",
+    id: "perm-prospects-export",
+    resource: "prospects",
+    action: "export",
+    description: "Export prospects to CSV/Excel",
   },
+
+  // Follow-ups
   {
-    id: "perm-b-manage",
-    resource: "billing",
+    id: "perm-followups-manage",
+    resource: "follow_ups",
     action: "manage",
-    description: "Create invoices and record payments",
+    description: "Manage prospect follow-ups",
+  },
+
+  // Meetings
+  {
+    id: "perm-meetings-manage",
+    resource: "meetings",
+    action: "manage",
+    description: "Schedule and manage client meetings",
+  },
+
+  // Quotations
+  {
+    id: "perm-quotations-read",
+    resource: "quotations",
+    action: "read",
+    description: "View quotations and proposals",
   },
   {
-    id: "perm-s-send",
-    resource: "sms",
-    action: "send",
-    description: "Send single and bulk SMS messages",
+    id: "perm-quotations-write",
+    resource: "quotations",
+    action: "write",
+    description: "Create and edit quotations",
   },
   {
-    id: "perm-a-access",
-    resource: "admin",
-    action: "access",
-    description: "Access system administration pages",
+    id: "perm-quotations-delete",
+    resource: "quotations",
+    action: "delete",
+    description: "Delete quotations",
+  },
+
+  // Orders
+  { id: "perm-orders-read", resource: "orders", action: "read", description: "View client orders" },
+  {
+    id: "perm-orders-manage",
+    resource: "orders",
+    action: "manage",
+    description: "Create and update client orders",
+  },
+
+  // Projects
+  {
+    id: "perm-projects-read",
+    resource: "projects",
+    action: "read",
+    description: "View production projects",
+  },
+  {
+    id: "perm-projects-manage",
+    resource: "projects",
+    action: "manage",
+    description: "Create and manage projects",
+  },
+
+  // Sales & Billing
+  {
+    id: "perm-sales-view",
+    resource: "sales",
+    action: "read",
+    description: "View won sales and achievements",
+  },
+  {
+    id: "perm-billing-read",
+    resource: "billing",
+    action: "read",
+    description: "Read billing and invoice records",
+  },
+  {
+    id: "perm-billing-write",
+    resource: "billing",
+    action: "write",
+    description: "Create and collect payments/invoices",
+  },
+
+  // Expenses
+  {
+    id: "perm-expenses-read",
+    resource: "expenses",
+    action: "read",
+    description: "View operational expenses",
+  },
+  {
+    id: "perm-expenses-manage",
+    resource: "expenses",
+    action: "manage",
+    description: "Create and manage expenses",
+  },
+
+  // SMS & Communication
+  { id: "perm-sms-send", resource: "sms", action: "send", description: "Send single and bulk SMS" },
+  { id: "perm-sms-logs", resource: "sms", action: "read", description: "View SMS delivery logs" },
+
+  // Analytics / Reports
+  {
+    id: "perm-reports-view",
+    resource: "reports",
+    action: "read",
+    description: "View performance reports and analytics",
+  },
+
+  // Administration
+  {
+    id: "perm-admin-users",
+    resource: "users",
+    action: "admin",
+    description: "Manage user accounts and credentials",
+  },
+  {
+    id: "perm-admin-roles",
+    resource: "roles",
+    action: "admin",
+    description: "Manage system roles and permissions",
+  },
+  {
+    id: "perm-services-read",
+    resource: "services",
+    action: "read",
+    description: "View agency services",
+  },
+  {
+    id: "perm-services-manage",
+    resource: "services",
+    action: "manage",
+    description: "Create and modify services",
+  },
+  {
+    id: "perm-stages-manage",
+    resource: "stages",
+    action: "manage",
+    description: "Configure pipeline stages",
+  },
+  {
+    id: "perm-stage-history-view",
+    resource: "stages",
+    action: "read",
+    description: "View stage transitions audit history",
+  },
+  {
+    id: "perm-admin-sms-gateway",
+    resource: "sms_gateway",
+    action: "admin",
+    description: "Configure SMS Gateway settings",
+  },
+  {
+    id: "perm-admin-backup",
+    resource: "backup",
+    action: "admin",
+    description: "Manage database backups and exports",
   },
 ];
 
@@ -104,11 +244,12 @@ export const rolesQueryOptions = () =>
   queryOptions({
     queryKey: ["admin-roles"],
     queryFn: async (): Promise<CrmRoleItem[]> => {
+      // Query roles with real-time user count computed directly from the users table
       const res = await runMySQLQuery<Record<string, unknown>[]>(`
         SELECT r.id, r.name, r.description, r.is_system, r.created_at, r.updated_at,
-          COUNT(DISTINCT ur.user_id) AS user_count
+          COUNT(DISTINCT CASE WHEN u.is_deleted = 0 THEN u.id END) AS user_count
         FROM roles r
-        LEFT JOIN user_roles ur ON (ur.role = r.name OR ur.role = LOWER(r.name) OR ur.role = r.id)
+        LEFT JOIN users u ON (UPPER(TRIM(u.role)) = UPPER(TRIM(r.name)) OR UPPER(TRIM(u.role)) = UPPER(TRIM(r.id)))
         GROUP BY r.id, r.name, r.description, r.is_system, r.created_at, r.updated_at
         ORDER BY r.is_system DESC, r.name ASC;
       `);
@@ -116,23 +257,70 @@ export const rolesQueryOptions = () =>
       if (!res.success || !Array.isArray(res.data)) {
         return [
           {
-            id: "role-admin",
+            id: "role-global-admin",
             name: "Admin",
             description: "Full administrative access to all CRM resources and settings.",
             is_system: true,
             permission_ids: DEFAULT_SYSTEM_PERMISSIONS.map((p) => p.id),
             permissions: DEFAULT_SYSTEM_PERMISSIONS,
-            user_count: 1,
+            user_count: 2,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           },
           {
-            id: "role-agent",
+            id: "role-global-agent",
             name: "Agent",
-            description: "Standard CRM agent with pipeline and billing creation permissions.",
+            description: "Standard CRM agent for leads, prospects, quotations and sales.",
             is_system: true,
-            permission_ids: ["perm-p-view", "perm-p-create", "perm-p-edit", "perm-b-view"],
-            permissions: DEFAULT_SYSTEM_PERMISSIONS.slice(0, 4),
+            permission_ids: [
+              "perm-prospects-read",
+              "perm-prospects-write",
+              "perm-followups-manage",
+              "perm-meetings-manage",
+              "perm-quotations-read",
+              "perm-quotations-write",
+              "perm-orders-read",
+              "perm-sales-view",
+            ],
+            permissions: DEFAULT_SYSTEM_PERMISSIONS.filter((p) =>
+              [
+                "perm-prospects-read",
+                "perm-prospects-write",
+                "perm-followups-manage",
+                "perm-meetings-manage",
+                "perm-quotations-read",
+                "perm-quotations-write",
+                "perm-orders-read",
+                "perm-sales-view",
+              ].includes(p.id),
+            ),
+            user_count: 3,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+          {
+            id: "role-global-artist",
+            name: "Artist",
+            description: "Creative artist for graphic designs, video ads & media assets.",
+            is_system: true,
+            permission_ids: [
+              "perm-projects-read",
+              "perm-projects-manage",
+              "perm-orders-read",
+              "perm-prospects-read",
+              "perm-services-read",
+              "perm-sales-view",
+            ],
+            permissions: DEFAULT_SYSTEM_PERMISSIONS.filter((p) =>
+              [
+                "perm-projects-read",
+                "perm-projects-manage",
+                "perm-orders-read",
+                "perm-prospects-read",
+                "perm-services-read",
+                "perm-sales-view",
+              ].includes(p.id),
+            ),
             user_count: 2,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
@@ -144,7 +332,7 @@ export const rolesQueryOptions = () =>
       for (const r of res.data) {
         const roleId = String(r["id"]);
         const permRes = await runMySQLQuery<Record<string, unknown>[]>(
-          "SELECT p.id, p.resource, p.action, p.description FROM role_permissions rp JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = ?;",
+          "SELECT p.id, p.resource, p.action, p.description FROM role_permissions rp JOIN permissions p ON rp.permission_id = p.id WHERE rp.role_id = ? ORDER BY p.resource ASC, p.action ASC;",
           [roleId],
         );
         const perms: RolePermissionItem[] = Array.isArray(permRes.data)
@@ -156,11 +344,16 @@ export const rolesQueryOptions = () =>
             }))
           : [];
 
+        const isSys =
+          Boolean(r["is_system"]) ||
+          roleId.startsWith("role-global-") ||
+          ["admin", "agent", "artist"].includes(String(r["name"] || "").toLowerCase());
+
         roleList.push({
           id: roleId,
           name: String(r["name"]),
           description: (r["description"] as string) || null,
-          is_system: Boolean(r["is_system"]),
+          is_system: isSys,
           permission_ids: perms.map((p) => p.id),
           permissions: perms,
           user_count: Number(r["user_count"] || 0),
@@ -174,31 +367,95 @@ export const rolesQueryOptions = () =>
     staleTime: 1000 * 30,
   });
 
+export async function fetchUsersForRole(
+  roleName: string,
+  roleId: string,
+): Promise<AssignedRoleUser[]> {
+  try {
+    const res = await runMySQLQuery<Record<string, unknown>[]>(
+      `SELECT id, name, email, avatar_url, status
+       FROM \`users\`
+       WHERE (UPPER(TRIM(role)) = UPPER(TRIM(?)) OR UPPER(TRIM(role)) = UPPER(TRIM(?)))
+         AND is_deleted = 0
+       ORDER BY name ASC;`,
+      [roleName, roleId],
+    );
+    if (res.success && Array.isArray(res.data)) {
+      return res.data.map((u) => ({
+        id: String(u["id"]),
+        name: String(u["name"] || "User"),
+        email: String(u["email"] || ""),
+        avatar_url: u["avatar_url"] ? String(u["avatar_url"]) : null,
+        status: String(u["status"] || "Active"),
+      }));
+    }
+  } catch (err) {
+    console.error("fetchUsersForRole error:", err);
+  }
+  return [];
+}
+
 export function useSaveRoleMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (payload: SaveRolePayload) => {
-      const roleId = payload.id || generateUUID();
+      const name = payload.name.trim();
+      if (!name) {
+        throw new Error("Role name is required.");
+      }
+
+      const roleId = payload.id || `role-${generateUUID()}`;
       const isUpdate = Boolean(payload.id);
 
+      // Check for duplicate name
+      const dupCheck = await runMySQLQuery<Record<string, unknown>[]>(
+        "SELECT id FROM `roles` WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ? LIMIT 1;",
+        [name, roleId],
+      );
+      if (dupCheck.success && Array.isArray(dupCheck.data) && dupCheck.data.length > 0) {
+        throw new Error(`A role with the name "${name}" already exists.`);
+      }
+
       if (isUpdate) {
-        await runMySQLQuery("UPDATE `roles` SET `name` = ?, `description` = ? WHERE `id` = ?;", [
-          payload.name,
-          payload.description || null,
-          roleId,
-        ]);
+        // If it's a system role, do not rename system roles
+        const checkSys = await runMySQLQuery<Record<string, unknown>[]>(
+          "SELECT is_system, name FROM `roles` WHERE id = ? LIMIT 1;",
+          [roleId],
+        );
+        const isSysRole =
+          checkSys.success &&
+          Array.isArray(checkSys.data) &&
+          (Boolean(checkSys.data[0]?.["is_system"]) ||
+            ["admin", "agent", "artist"].includes(
+              String(checkSys.data[0]?.["name"] || "").toLowerCase(),
+            ));
+
+        if (isSysRole) {
+          // Keep system role name intact, update description only
+          await runMySQLQuery("UPDATE `roles` SET `description` = ? WHERE `id` = ?;", [
+            payload.description || null,
+            roleId,
+          ]);
+        } else {
+          await runMySQLQuery("UPDATE `roles` SET `name` = ?, `description` = ? WHERE `id` = ?;", [
+            name,
+            payload.description || null,
+            roleId,
+          ]);
+        }
       } else {
         await runMySQLQuery(
           "INSERT INTO `roles` (`id`, `name`, `description`, `is_system`) VALUES (?, ?, ?, 0);",
-          [roleId, payload.name, payload.description || null],
+          [roleId, name, payload.description || null],
         );
       }
 
+      // Sync role permissions
       await runMySQLQuery("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [roleId]);
       for (const permId of payload.permission_ids) {
         await runMySQLQuery(
-          "INSERT INTO `role_permissions` (`role_id`, `permission_id`) VALUES (?, ?);",
+          "INSERT IGNORE INTO `role_permissions` (`role_id`, `permission_id`) VALUES (?, ?);",
           [roleId, permId],
         );
       }
@@ -207,6 +464,7 @@ export function useSaveRoleMutation() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["admin-roles"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-permissions"] });
       toast.success(
         variables.id
           ? `Role "${variables.name}" updated successfully!`
@@ -223,9 +481,25 @@ export function useDeleteRoleMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (roleId: string) => {
-      await runMySQLQuery("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [roleId]);
-      await runMySQLQuery("DELETE FROM `roles` WHERE `id` = ? AND `is_system` = 0;", [roleId]);
+    mutationFn: async (role: CrmRoleItem) => {
+      if (
+        role.is_system ||
+        role.id.startsWith("role-global-") ||
+        ["admin", "agent", "artist"].includes(role.name.toLowerCase())
+      ) {
+        throw new Error("System default roles cannot be deleted.");
+      }
+
+      // Safety check: ensure no active users have this role
+      const usersAssigned = await fetchUsersForRole(role.name, role.id);
+      if (usersAssigned.length > 0) {
+        throw new Error(
+          `Cannot delete role "${role.name}": ${usersAssigned.length} active user(s) currently assigned. Please reassign those users before deleting.`,
+        );
+      }
+
+      await runMySQLQuery("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [role.id]);
+      await runMySQLQuery("DELETE FROM `roles` WHERE `id` = ? AND `is_system` = 0;", [role.id]);
       return { success: true };
     },
     onSuccess: () => {

@@ -22,6 +22,8 @@ import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { generateUUID } from "@/lib/mysql-client";
 import { useAuth } from "@/lib/auth";
+import { BRANDIUM_TERMS } from "@/components/invoices/torn-paper-terms";
+import { TermsEditor, termsToSave } from "@/components/sales/terms-editor";
 import type {
   AdvancePaymentRecord,
   CrmQuotationItem,
@@ -49,6 +51,16 @@ interface CreateQuotationDialogProps {
   allQuotations: CrmQuotationItem[];
   onSave: (data: SaveQuotationPayload) => Promise<void>;
   isSaving: boolean;
+  /** Prefill from a lead (e.g. opened from the Lead Details dialog). */
+  initial?:
+    | {
+        prospectId: string;
+        contactPerson: string;
+        companyName: string;
+        address: string;
+        phone: string;
+      }
+    | undefined;
 }
 
 /** Clone of ERPAPP `create-quotation-dialog.tsx`, persisted to MySQL `quotations`. */
@@ -59,15 +71,18 @@ export function CreateQuotationDialog({
   allQuotations,
   onSave,
   isSaving,
+  initial,
 }: CreateQuotationDialogProps) {
   const { user, profile } = useAuth();
 
-  const [jobId, setJobId] = useState("");
-  const [companyName, setCompanyName] = useState("");
-  const [address, setAddress] = useState("");
-  const [phoneNumber, setPhoneNumber] = useState("");
+  const [jobId, setJobId] = useState(initial?.contactPerson ?? "");
+  const [companyName, setCompanyName] = useState(initial?.companyName ?? "");
+  const [address, setAddress] = useState(initial?.address ?? "");
+  const [phoneNumber, setPhoneNumber] = useState(initial?.phone ?? "");
   const [currentOrderDate, setCurrentOrderDate] = useState<Date | undefined>(new Date());
   const [orderNotes, setOrderNotes] = useState("");
+  // One term per line; new documents start from the default list
+  const [termsText, setTermsText] = useState(() => BRANDIUM_TERMS.join("\n"));
   const [orderItems, setOrderItems] = useState<DialogLineItem[]>(() => [createEmptyItem()]);
   const [specialClientDiscount, setSpecialClientDiscount] = useState("");
   const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
@@ -232,6 +247,7 @@ export function CreateQuotationDialog({
 
     await onSave({
       title: companyName.trim(),
+      prospect_id: initial?.prospectId ?? null,
       client_name: jobId.trim(),
       client_phone: phoneNumber.trim(),
       client_address: address.trim(),
@@ -244,6 +260,7 @@ export function CreateQuotationDialog({
       order_date: format(currentOrderDate, "yyyy-MM-dd"),
       created_at: toMySQLDateTime(currentOrderDate),
       notes: buildQuotationNotes(orderNotes, specialClientDiscount, orderItems),
+      terms: termsToSave(termsText),
     });
   };
 
@@ -510,6 +527,14 @@ export function CreateQuotationDialog({
                 </span>
               </div>
             </div>
+
+            <TermsEditor
+              id="create-quotationTerms"
+              value={termsText}
+              onChange={setTermsText}
+              disabled={isSaving}
+              documentLabel="quotation"
+            />
           </div>
           <DialogFooter className="pt-3 sm:pt-4 border-t flex flex-col-reverse sm:flex-row gap-2">
             <Button

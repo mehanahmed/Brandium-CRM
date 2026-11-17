@@ -44,7 +44,8 @@ import {
 } from "@/components/ui/table";
 import { generateUUID } from "@/lib/mysql-client";
 import { useAuth } from "@/lib/auth";
-import type { CrmOrder, SaveOrderPayload } from "@/lib/orders";
+import { resolveOrderTerms, type CrmOrder, type SaveOrderPayload } from "@/lib/orders";
+import { TermsEditor, termsToSave } from "@/components/sales/terms-editor";
 import type { AdvancePaymentRecord } from "@/lib/projects";
 import {
   calculateLineItemTotal,
@@ -106,6 +107,8 @@ export function EditOrderDialog({
   );
   const [isStarred, setIsStarred] = useState(order.is_starred);
   const [orderNotes, setOrderNotes] = useState(order.notes || "");
+  // One term per line; starts from this order's terms (or the default list)
+  const [termsText, setTermsText] = useState(() => resolveOrderTerms(order).join("\n"));
   const [orderItems, setOrderItems] = useState<DialogLineItem[]>(() =>
     order.items.map((item) => ({
       id: item.id,
@@ -266,6 +269,7 @@ export function EditOrderDialog({
 
     await onSave({
       id: order.id,
+      expected_updated_at: order.updated_at,
       job_id: jobIdInput.trim() || null,
       company_name: companyNameInput.trim(),
       phone: phoneNumber.trim(),
@@ -277,6 +281,7 @@ export function EditOrderDialog({
       advance_payments: advancePayments,
       is_starred: isStarred,
       notes: orderNotes.trim() || null,
+      terms: termsToSave(termsText),
       order_date: toMySQLDateTime(createdAt),
       delivery_date: acceptedDeliveryDate ? toMySQLDateTime(acceptedDeliveryDate) : null,
       changed_by_name: profile?.full_name || "Admin",
@@ -677,6 +682,14 @@ export function EditOrderDialog({
                   </span>
                 </div>
               </div>
+
+              <TermsEditor
+                id="edit-orderTerms"
+                value={termsText}
+                onChange={setTermsText}
+                disabled={isSaving}
+                documentLabel="order"
+              />
             </div>
             <DialogFooter className="pt-3 sm:pt-4 border-t flex flex-col-reverse sm:flex-row gap-2">
               <Button

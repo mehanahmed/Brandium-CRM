@@ -1,22 +1,8 @@
-import { createServerFn } from "./server-fn";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "node:crypto";
 import mysql from "mysql2/promise";
 
 import { getMySQLConfig, getMySQLTimestamp } from "./mysql-client";
-import { createSingleMySQLConnection } from "./mysql-server";
-
-export type AuthenticateUserResponse = {
-  success: boolean;
-  error?: string;
-  isSuspended?: boolean;
-  user?: {
-    id: string;
-    name: string;
-    email: string;
-    role: "admin" | "agent";
-    avatar_url?: string | null;
-  };
-};
 
 // In-Memory Schema Bootstrapping Cache & Concurrency Latch
 let isSchemaInitialized = false;
@@ -569,6 +555,7 @@ export async function ensureMySQLTablesExist(
         \`tenant_id\` VARCHAR(36) NULL,
         \`name\` VARCHAR(80) NOT NULL,
         \`description\` VARCHAR(255) NULL,
+        \`is_system\` TINYINT(1) NOT NULL DEFAULT 0,
         \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (\`id\`),
@@ -728,10 +715,12 @@ export async function ensureMySQLTablesExist(
         { table: "projects", column: "advance_payments", def: "LONGTEXT NULL" },
         // quotations
         { table: "quotations", column: "client_phone", def: "VARCHAR(50) NULL" },
+        { table: "quotations", column: "terms", def: "LONGTEXT NULL" },
         { table: "quotations", column: "client_email", def: "VARCHAR(255) NULL" },
         { table: "quotations", column: "client_address", def: "TEXT NULL" },
         // orders
         { table: "orders", column: "job_id", def: "VARCHAR(100) NULL" },
+        { table: "orders", column: "terms", def: "LONGTEXT NULL" },
         { table: "orders", column: "address", def: "TEXT NULL" },
         { table: "orders", column: "crm_user_id", def: "VARCHAR(36) NULL" },
         { table: "orders", column: "designer_id", def: "VARCHAR(36) NULL" },
@@ -858,32 +847,60 @@ export async function ensureMySQLTablesExist(
       }
 
       await conn.query(`
-        INSERT IGNORE INTO \`roles\` (\`id\`, \`tenant_id\`, \`name\`, \`description\`)
+        INSERT INTO \`roles\` (\`id\`, \`tenant_id\`, \`name\`, \`description\`, \`is_system\`)
         VALUES
-          ('role-global-admin', NULL, 'Admin', 'Platform administrator with full system access'),
-          ('role-global-agent', NULL, 'Agent', 'CRM sales agent for telesales & prospect management'),
-          ('role-global-artist', NULL, 'Artist', 'Creative artist for graphic designs, video ads & media assets');
+          ('role-global-admin', NULL, 'Admin', 'Platform administrator with full system access', 1),
+          ('role-global-agent', NULL, 'Agent', 'CRM sales agent for telesales & prospect management', 1),
+          ('role-global-artist', NULL, 'Artist', 'Creative artist for graphic designs, video ads & media assets', 1),
+          ('role-stage-sw', NULL, 'SW', 'Script Writer: assigned the Script Writer project stage', 1),
+          ('role-stage-cp', NULL, 'CP', 'Content Planner: assigned the Content Planner project stage', 1),
+          ('role-stage-vg', NULL, 'VG', 'Videographer: assigned the Videographer project stage', 1),
+          ('role-stage-ve', NULL, 'VE', 'Video Editor: assigned the Video Editor project stage', 1),
+          ('role-stage-mk', NULL, 'MK', 'Marketer: assigned the Marketer project stage', 1),
+          ('role-stage-dev', NULL, 'DEV', 'Developer: assigned the Developer project stage', 1)
+        ON DUPLICATE KEY UPDATE \`is_system\` = 1, \`description\` = VALUES(\`description\`);
       `);
 
       await conn.query(`
-        INSERT IGNORE INTO \`permissions\` (\`id\`, \`resource\`, \`action\`, \`description\`)
+        INSERT INTO \`permissions\` (\`id\`, \`resource\`, \`action\`, \`description\`)
         VALUES
           ('perm-prospects-read', 'prospects', 'read', 'View prospects and lead records'),
           ('perm-prospects-write', 'prospects', 'write', 'Create and update prospects'),
           ('perm-prospects-delete', 'prospects', 'delete', 'Delete and manage prospects'),
+          ('perm-prospects-export', 'prospects', 'export', 'Export prospects to CSV/Excel'),
           ('perm-opportunities-manage', 'opportunities', 'manage', 'Manage sales opportunities and deals'),
           ('perm-followups-manage', 'follow_ups', 'manage', 'Manage prospect follow-ups'),
           ('perm-meetings-manage', 'meetings', 'manage', 'Schedule and manage client meetings'),
+          ('perm-quotations-read', 'quotations', 'read', 'View quotations and proposals'),
+          ('perm-quotations-write', 'quotations', 'write', 'Create and edit quotations'),
+          ('perm-quotations-delete', 'quotations', 'delete', 'Delete quotations'),
+          ('perm-orders-read', 'orders', 'read', 'View client orders'),
+          ('perm-orders-manage', 'orders', 'manage', 'Create and update client orders'),
+          ('perm-projects-read', 'projects', 'read', 'View production projects'),
+          ('perm-projects-manage', 'projects', 'manage', 'Create and manage projects'),
           ('perm-sales-view', 'sales', 'read', 'View won sales and achievements'),
           ('perm-services-read', 'services', 'read', 'View agency services and packages'),
           ('perm-services-manage', 'services', 'manage', 'Create and modify services'),
           ('perm-stages-manage', 'stages', 'manage', 'Configure pipeline stages'),
+          ('perm-stage-history-view', 'stages', 'read', 'View stage transitions audit history'),
           ('perm-billing-read', 'billing', 'read', 'Read billing and invoice records'),
           ('perm-billing-write', 'billing', 'write', 'Create and collect payments/invoices'),
+          ('perm-expenses-read', 'expenses', 'read', 'View operational expenses'),
+          ('perm-expenses-manage', 'expenses', 'manage', 'Create and manage expenses'),
           ('perm-sms-send', 'sms', 'send', 'Send bulk SMS to clients'),
+          ('perm-sms-logs', 'sms', 'read', 'View SMS delivery logs'),
           ('perm-reports-view', 'reports', 'read', 'View performance reports and analytics'),
+          ('perm-scope-all-leads', 'leads', 'scope_all', 'See every user''s prospects and follow-ups'),
+          ('perm-scope-all-meetings', 'meetings', 'scope_all', 'See every user''s meetings'),
+          ('perm-scope-all-quotations', 'quotations', 'scope_all', 'See every user''s quotations'),
+          ('perm-scope-all-orders', 'orders', 'scope_all', 'See every user''s orders and projects'),
+          ('perm-scope-all-sms', 'sms', 'scope_all', 'See every user''s SMS logs'),
+          ('perm-scope-all-expenses', 'expenses', 'scope_all', 'See every user''s expenses'),
           ('perm-admin-users', 'users', 'admin', 'Manage user accounts and credentials'),
-          ('perm-admin-roles', 'roles', 'admin', 'Manage system roles and permissions');
+          ('perm-admin-roles', 'roles', 'admin', 'Manage system roles and permissions'),
+          ('perm-admin-sms-gateway', 'sms_gateway', 'admin', 'Configure SMS Gateway settings'),
+          ('perm-admin-backup', 'backup', 'admin', 'Manage database backups and exports')
+        ON DUPLICATE KEY UPDATE \`description\` = VALUES(\`description\`), \`resource\` = VALUES(\`resource\`), \`action\` = VALUES(\`action\`);
       `);
 
       await conn.query(`
@@ -892,31 +909,66 @@ export async function ensureMySQLTablesExist(
           ('role-global-admin', 'perm-prospects-read'),
           ('role-global-admin', 'perm-prospects-write'),
           ('role-global-admin', 'perm-prospects-delete'),
+          ('role-global-admin', 'perm-prospects-export'),
           ('role-global-admin', 'perm-opportunities-manage'),
           ('role-global-admin', 'perm-followups-manage'),
           ('role-global-admin', 'perm-meetings-manage'),
+          ('role-global-admin', 'perm-quotations-read'),
+          ('role-global-admin', 'perm-quotations-write'),
+          ('role-global-admin', 'perm-quotations-delete'),
+          ('role-global-admin', 'perm-orders-read'),
+          ('role-global-admin', 'perm-orders-manage'),
+          ('role-global-admin', 'perm-projects-read'),
+          ('role-global-admin', 'perm-projects-manage'),
           ('role-global-admin', 'perm-sales-view'),
           ('role-global-admin', 'perm-services-read'),
           ('role-global-admin', 'perm-services-manage'),
           ('role-global-admin', 'perm-stages-manage'),
+          ('role-global-admin', 'perm-stage-history-view'),
           ('role-global-admin', 'perm-billing-read'),
           ('role-global-admin', 'perm-billing-write'),
+          ('role-global-admin', 'perm-expenses-read'),
+          ('role-global-admin', 'perm-expenses-manage'),
           ('role-global-admin', 'perm-sms-send'),
+          ('role-global-admin', 'perm-sms-logs'),
           ('role-global-admin', 'perm-reports-view'),
           ('role-global-admin', 'perm-admin-users'),
           ('role-global-admin', 'perm-admin-roles'),
+          ('role-global-admin', 'perm-admin-sms-gateway'),
+          ('role-global-admin', 'perm-admin-backup'),
 
           ('role-global-agent', 'perm-prospects-read'),
           ('role-global-agent', 'perm-prospects-write'),
           ('role-global-agent', 'perm-opportunities-manage'),
           ('role-global-agent', 'perm-followups-manage'),
           ('role-global-agent', 'perm-meetings-manage'),
+          ('role-global-agent', 'perm-quotations-read'),
+          ('role-global-agent', 'perm-quotations-write'),
+          ('role-global-agent', 'perm-orders-read'),
           ('role-global-agent', 'perm-services-read'),
           ('role-global-agent', 'perm-sales-view'),
+          ('role-global-agent', 'perm-sms-send'),
+          ('role-global-agent', 'perm-sms-logs'),
 
+          ('role-global-artist', 'perm-projects-read'),
+          ('role-global-artist', 'perm-projects-manage'),
+          ('role-global-artist', 'perm-orders-read'),
           ('role-global-artist', 'perm-prospects-read'),
           ('role-global-artist', 'perm-services-read'),
-          ('role-global-artist', 'perm-sales-view');
+          ('role-global-artist', 'perm-sales-view'),
+
+          ('role-stage-sw', 'perm-projects-read'), ('role-stage-sw', 'perm-projects-manage'),
+          ('role-stage-sw', 'perm-orders-read'), ('role-stage-sw', 'perm-services-read'),
+          ('role-stage-cp', 'perm-projects-read'), ('role-stage-cp', 'perm-projects-manage'),
+          ('role-stage-cp', 'perm-orders-read'), ('role-stage-cp', 'perm-services-read'),
+          ('role-stage-vg', 'perm-projects-read'), ('role-stage-vg', 'perm-projects-manage'),
+          ('role-stage-vg', 'perm-orders-read'), ('role-stage-vg', 'perm-services-read'),
+          ('role-stage-ve', 'perm-projects-read'), ('role-stage-ve', 'perm-projects-manage'),
+          ('role-stage-ve', 'perm-orders-read'), ('role-stage-ve', 'perm-services-read'),
+          ('role-stage-mk', 'perm-projects-read'), ('role-stage-mk', 'perm-projects-manage'),
+          ('role-stage-mk', 'perm-orders-read'), ('role-stage-mk', 'perm-services-read'),
+          ('role-stage-dev', 'perm-projects-read'), ('role-stage-dev', 'perm-projects-manage'),
+          ('role-stage-dev', 'perm-orders-read'), ('role-stage-dev', 'perm-services-read');
       `);
 
       // Seed default follow-up stages
@@ -1160,64 +1212,23 @@ export async function ensureMySQLTablesExist(
       // Re-enable foreign key checks
       await conn.query("SET FOREIGN_KEY_CHECKS = 1;");
 
-      // Seed default admin accounts into \`users\` if table is empty
+      // First run only: one admin. The password comes from INITIAL_ADMIN_PASSWORD, or a random
+      // one is printed once in the server log. No fixed passwords live in the source.
       const [countRows] = await conn.query(`SELECT COUNT(*) as cnt FROM \`users\`;`);
       if (Number((countRows as Array<{ cnt: number }>)?.[0]?.cnt ?? 0) === 0) {
-        const hashAdmin = bcrypt.hashSync("Admin@12345", 10);
-        const hashAgent = bcrypt.hashSync("Agent@12345", 10);
+        const envPassword = process.env["INITIAL_ADMIN_PASSWORD"];
+        const password = envPassword || randomBytes(9).toString("base64url");
         const now = getMySQLTimestamp();
-
         await conn.query(
-          `
-        INSERT INTO \`users\` (\`id\`, \`name\`, \`email\`, \`password_hash\`, \`role\`, \`status\`, \`avatar_url\`, \`is_deleted\`, \`created_at\`, \`updated_at\`)
-        VALUES
-        ('usr-admin-1', 'Mehan Ahmed (System Admin)', 'admin@example.com', ?, 'ADMIN', 'Active', NULL, 0, ?, ?),
-        ('usr-admin-2', 'Mehan Ahmed', 'mehan.ahmed.official@gmail.com', ?, 'ADMIN', 'Active', NULL, 0, ?, ?),
-        ('usr-agent-0', 'Agent User', 'agent@brandium.com', ?, 'AGENT', 'Active', NULL, 0, ?, ?),
-        ('usr-artist-1', 'Sabbir Hossain (Artist)', 'sabbir.artist@brandium.com', ?, 'ARTIST', 'Active', NULL, 0, ?, ?),
-        ('usr-artist-2', 'Arefin Shuvo (Artist)', 'arefin.artist@brandium.com', ?, 'ARTIST', 'Active', NULL, 0, ?, ?);
-      `,
-          [
-            hashAdmin,
-            now,
-            now,
-            hashAdmin,
-            now,
-            now,
-            hashAgent,
-            now,
-            now,
-            hashAgent,
-            now,
-            now,
-            hashAgent,
-            now,
-            now,
-          ],
+          `INSERT INTO \`users\` (\`id\`, \`name\`, \`email\`, \`password_hash\`, \`role\`, \`status\`, \`avatar_url\`, \`is_deleted\`, \`created_at\`, \`updated_at\`)
+           VALUES ('usr-admin-1', 'System Admin', 'admin@example.com', ?, 'ADMIN', 'Active', NULL, 0, ?, ?);`,
+          [bcrypt.hashSync(password, 10), now, now],
         );
-      }
-
-      // Ensure default artist accounts exist if missing
-      try {
-        const [artCountRows] = await conn.query(
-          `SELECT COUNT(*) as cnt FROM \`users\` WHERE UPPER(role) = 'ARTIST' AND is_deleted = 0;`,
-        );
-        if (Number((artCountRows as Array<{ cnt: number }>)?.[0]?.cnt ?? 0) === 0) {
-          const hashArtist = bcrypt.hashSync("Artist@12345", 10);
-          const now = getMySQLTimestamp();
-          await conn.query(
-            `
-            INSERT INTO \`users\` (\`id\`, \`name\`, \`email\`, \`password_hash\`, \`role\`, \`status\`, \`avatar_url\`, \`is_deleted\`, \`created_at\`, \`updated_at\`)
-            VALUES
-            ('usr-artist-1', 'Sabbir Hossain', 'sabbir.artist@brandium.com', ?, 'ARTIST', 'Active', NULL, 0, ?, ?),
-            ('usr-artist-2', 'Arefin Shuvo', 'arefin.artist@brandium.com', ?, 'ARTIST', 'Active', NULL, 0, ?, ?)
-            ON DUPLICATE KEY UPDATE \`role\` = 'ARTIST', \`status\` = 'Active';
-          `,
-            [hashArtist, now, now, hashArtist, now, now],
+        if (!envPassword) {
+          console.warn(
+            `[Brandium] First admin created: admin@example.com / ${password} (change it after signing in)`,
           );
         }
-      } catch {
-        // Ignore
       }
 
       // Always sync users into profiles table
@@ -1304,526 +1315,3 @@ export async function ensureMySQLTablesExist(
 
   return initSchemaPromise;
 }
-
-export const authenticateXamppUser = createServerFn({ method: "POST" })
-  .validator((input: { email?: string; password?: string }) => input)
-  .handler(async ({ data }): Promise<AuthenticateUserResponse> => {
-    const email = String(data?.email || "")
-      .toLowerCase()
-      .trim();
-    const password = String(data?.password || "");
-
-    if (!email || !password) {
-      return { success: false, error: "Please enter both email and password." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-
-      // Execute ERP Automatic Database Table & Schema Auto-Creation Engine
-      await ensureMySQLTablesExist(conn);
-
-      if (email === "admin@example.com" || email === "agent@brandium.com") {
-        try {
-          await conn.query(
-            "UPDATE `users` SET `status` = 'Active', `is_deleted` = 0 WHERE LOWER(`email`) = ?",
-            [email],
-          );
-        } catch {
-          // Ignore
-        }
-      }
-
-      const [rows] = await conn.query(
-        "SELECT id, name, email, password_hash, role, status, avatar_url, is_deleted FROM users WHERE LOWER(email) = ? AND is_deleted = 0 LIMIT 1",
-        [email],
-      );
-      await conn.end();
-
-      const userList = rows as Array<{
-        id: string;
-        name: string;
-        email: string;
-        password_hash: string;
-        role: string;
-        status: string;
-        avatar_url: string | null;
-        is_deleted: number;
-      }>;
-
-      if (!userList || userList.length === 0 || !userList[0]) {
-        return {
-          success: false,
-          error: "Invalid email or password. User account not found in database.",
-        };
-      }
-
-      const user = userList[0];
-
-      if (user.status && user.status !== "Active") {
-        return {
-          success: false,
-          isSuspended: true,
-          error: "This user account is inactive or disabled. Contact administrator.",
-        };
-      }
-
-      let isMatch = false;
-      if (user.password_hash) {
-        try {
-          isMatch = bcrypt.compareSync(password, user.password_hash);
-        } catch {
-          isMatch = false;
-        }
-      }
-
-      if (!isMatch) {
-        return {
-          success: false,
-          error: "Invalid email or password. Incorrect password entered.",
-        };
-      }
-
-      const roleStr = String(user.role || "AGENT").toLowerCase() as "admin" | "agent";
-
-      return {
-        success: true,
-        user: {
-          id: String(user.id),
-          name: String(user.name || "User"),
-          email: String(user.email),
-          role: roleStr,
-          avatar_url: user.avatar_url ? String(user.avatar_url) : null,
-        },
-      };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      console.error("MySQL Auth Error:", errObj?.message || err);
-      return {
-        success: false,
-        error: `Database connection error: Unable to connect to MySQL database (${errObj?.message || "Connection refused"}).`,
-      };
-    }
-  });
-
-/**
- * Server Function: Auto-Creates Database and all 13+ Tables on App Startup.
- */
-export const bootstrapDatabaseOnStartup = createServerFn({ method: "GET" }).handler(
-  async (): Promise<{ success: boolean; message: string }> => {
-    try {
-      const config = getMySQLConfig();
-      // Connect to MySQL server without database parameter first
-      const conn = await mysql.createConnection({
-        host: config.host,
-        port: config.port,
-        user: config.user,
-        password: config.password ?? "",
-      });
-
-      // 1. Auto Create Database IF NOT EXISTS
-      await conn.query(
-        `CREATE DATABASE IF NOT EXISTS \`${config.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
-      );
-      await conn.query(`USE \`${config.database}\`;`);
-
-      // 2. Auto Create All Tables IF NOT EXISTS
-      await ensureMySQLTablesExist(conn);
-      await conn.end();
-
-      return {
-        success: true,
-        message: `Database '${config.database}' and all tables auto-created successfully!`,
-      };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      console.warn("Auto DB Init notice:", errObj?.message || err);
-      return { success: false, message: errObj?.message || "MySQL Connection Error" };
-    }
-  },
-);
-
-/**
- * Server Function: Updates User Avatar directly in MySQL Database (\`users\` table).
- */
-export const updateMySQLUserAvatar = createServerFn({ method: "POST" })
-  .validator((input: { userId: string; avatarUrl: string }) => input)
-  .handler(async ({ data }): Promise<{ success: boolean; error?: string }> => {
-    const userId = String(data?.userId || "").trim();
-    const avatarUrl = String(data?.avatarUrl || "");
-
-    if (!userId) {
-      return { success: false, error: "User ID is required." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-
-      // Update \`users\` table avatar_url in MySQL DB
-      await conn.query("UPDATE `users` SET `avatar_url` = ?, `updated_at` = ? WHERE `id` = ?", [
-        avatarUrl || null,
-        now,
-        userId,
-      ]);
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      console.error("Update MySQL User Avatar Error:", errObj?.message || err);
-      return {
-        success: false,
-        error: errObj?.message || "Failed to update avatar in MySQL database.",
-      };
-    }
-  });
-
-/**
- * Server Function: Fetches all active users from MySQL database including avatar_url.
- */
-export const fetchMySQLUsers = createServerFn({ method: "GET" }).handler(
-  async (): Promise<{
-    success: boolean;
-    users: Array<Record<string, string | number | boolean | null>>;
-  }> => {
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const [rows] = await conn.query(
-        "SELECT id, name, email, password_hash, role, status, avatar_url, is_deleted, created_at, updated_at FROM users WHERE is_deleted = 0 ORDER BY created_at DESC",
-      );
-      await conn.end();
-
-      return {
-        success: true,
-        users: (rows as Array<Record<string, string | number | boolean | null>>) || [],
-      };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      console.warn("Fetch MySQL Users Error:", errObj?.message || err);
-      return { success: false, users: [] };
-    }
-  },
-);
-
-/**
- * Server Function: Updates User Details (Name, Email, Role, Status) in MySQL Database.
- */
-export const updateMySQLUser = createServerFn({ method: "POST" })
-  .validator(
-    (input: {
-      userId: string;
-      name: string;
-      email: string;
-      role: "ADMIN" | "AGENT";
-      status: "Active" | "Inactive" | "Deleted";
-    }) => input,
-  )
-  .handler(async ({ data }): Promise<{ success: boolean; error?: string }> => {
-    const userId = String(data?.userId || "").trim();
-    const name = String(data?.name || "").trim();
-    const email = String(data?.email || "")
-      .toLowerCase()
-      .trim();
-    const role = data?.role || "AGENT";
-    const status = data?.status || "Active";
-
-    if (!userId || !name || !email) {
-      return { success: false, error: "User ID, name, and email are required." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-
-      await conn.query(
-        "UPDATE `users` SET `name` = ?, `email` = ?, `role` = ?, `status` = ?, `updated_at` = ? WHERE `id` = ?",
-        [name, email, role, status, now, userId],
-      );
-
-      try {
-        await conn.query(
-          "UPDATE `profiles` SET `full_name` = ?, `email` = ?, `updated_at` = ? WHERE `id` = ?",
-          [name, email, now, userId],
-        );
-      } catch {
-        // Ignore
-      }
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      console.error("Update MySQL User Error:", errObj?.message || err);
-      return {
-        success: false,
-        error: errObj?.message || "Failed to update user in MySQL database.",
-      };
-    }
-  });
-
-/**
- * Server Function: Creates a New User in MySQL Database.
- */
-export const createMySQLUser = createServerFn({ method: "POST" })
-  .validator(
-    (input: {
-      userId: string;
-      name: string;
-      email: string;
-      passwordHash: string;
-      role: "ADMIN" | "AGENT";
-      status: "Active" | "Inactive" | "Deleted";
-      avatarUrl?: string | null;
-    }) => input,
-  )
-  .handler(async ({ data }): Promise<{ success: boolean; error?: string }> => {
-    const userId = String(data?.userId || "").trim();
-    const name = String(data?.name || "").trim();
-    const email = String(data?.email || "")
-      .toLowerCase()
-      .trim();
-    const passwordHash = String(data?.passwordHash || "");
-    const role = data?.role || "AGENT";
-    const status = data?.status || "Active";
-    const avatarUrl = data?.avatarUrl || null;
-
-    if (!userId || !name || !email) {
-      return { success: false, error: "User ID, name, and email are required." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-
-      await conn.query(
-        `INSERT INTO \`users\` (\`id\`, \`name\`, \`email\`, \`password_hash\`, \`role\`, \`status\`, \`avatar_url\`, \`is_deleted\`, \`created_at\`, \`updated_at\`)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-        [userId, name, email, passwordHash, role, status, avatarUrl, now, now],
-      );
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      console.error("Create MySQL User Error:", errObj?.message || err);
-      return {
-        success: false,
-        error: errObj?.message || "Failed to create user in MySQL database.",
-      };
-    }
-  });
-
-/**
- * Server Function: Toggles User Active Status in MySQL Database.
- */
-export const toggleMySQLUserStatus = createServerFn({ method: "POST" })
-  .validator((input: { userId: string; status: "Active" | "Inactive" | "Deleted" }) => input)
-  .handler(async ({ data }): Promise<{ success: boolean; error?: string }> => {
-    const userId = String(data?.userId || "").trim();
-    const status = data?.status || "Active";
-
-    if (!userId) {
-      return { success: false, error: "User ID is required." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-
-      await conn.query("UPDATE `users` SET `status` = ?, `updated_at` = ? WHERE `id` = ?", [
-        status,
-        now,
-        userId,
-      ]);
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      return { success: false, error: errObj?.message || "Failed to toggle status." };
-    }
-  });
-
-/**
- * Server Function: Soft Deletes User Account in MySQL Database.
- */
-export const softDeleteMySQLUser = createServerFn({ method: "POST" })
-  .validator((input: { userId: string }) => input)
-  .handler(async ({ data }): Promise<{ success: boolean; error?: string }> => {
-    const userId = String(data?.userId || "").trim();
-
-    if (!userId) {
-      return { success: false, error: "User ID is required." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-
-      await conn.query(
-        "UPDATE `users` SET `is_deleted` = 1, `status` = 'Deleted', `deleted_at` = ?, `updated_at` = ? WHERE `id` = ?",
-        [now, now, userId],
-      );
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      return { success: false, error: errObj?.message || "Failed to soft delete user." };
-    }
-  });
-
-/**
- * Server Function: Resets User Password in MySQL Database.
- */
-export const resetMySQLUserPassword = createServerFn({ method: "POST" })
-  .validator((input: { userId: string; passwordHash: string }) => input)
-  .handler(async ({ data }): Promise<{ success: boolean; error?: string }> => {
-    const userId = String(data?.userId || "").trim();
-    const passwordHash = String(data?.passwordHash || "");
-
-    if (!userId || !passwordHash) {
-      return { success: false, error: "User ID and password hash are required." };
-    }
-
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-
-      await conn.query("UPDATE `users` SET `password_hash` = ?, `updated_at` = ? WHERE `id` = ?", [
-        passwordHash,
-        now,
-        userId,
-      ]);
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const errObj = err as { message?: string };
-      return { success: false, error: errObj?.message || "Failed to reset password." };
-    }
-  });
-
-// â”€â”€â”€ MySQL Session Server Functions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Replaces localStorage.brandium_dev_session â€” stores auth sessions in MySQL
-
-export const createMySQLSession = createServerFn({ method: "POST" })
-  .validator(
-    (d: {
-      sessionId: string;
-      userId: string;
-      userEmail: string;
-      userName: string;
-      userRole: "admin" | "agent";
-      avatarUrl?: string | null;
-    }) => d,
-  )
-  .handler(async ({ data }) => {
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      // Session expires in 30 days
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-        .toISOString()
-        .slice(0, 19)
-        .replace("T", " ");
-
-      await conn.query(
-        `INSERT INTO \`sessions\` (\`id\`, \`user_id\`, \`user_email\`, \`user_name\`, \`user_role\`, \`avatar_url\`, \`expires_at\`)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           \`user_id\` = VALUES(\`user_id\`),
-           \`user_email\` = VALUES(\`user_email\`),
-           \`user_name\` = VALUES(\`user_name\`),
-           \`user_role\` = VALUES(\`user_role\`),
-           \`avatar_url\` = VALUES(\`avatar_url\`),
-           \`expires_at\` = VALUES(\`expires_at\`)`,
-        [
-          data.sessionId,
-          data.userId,
-          data.userEmail,
-          data.userName,
-          data.userRole,
-          data.avatarUrl ?? null,
-          expiresAt,
-        ],
-      );
-
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const e = err as { message?: string };
-      return { success: false, error: e?.message || "Failed to create session." };
-    }
-  });
-
-export const getMySQLSession = createServerFn({ method: "GET" })
-  .validator((d: { sessionId: string }) => d)
-  .handler(async ({ data }) => {
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-
-      const now = getMySQLTimestamp();
-      const [rows] = await conn.query(
-        `SELECT * FROM \`sessions\` WHERE \`id\` = ? AND \`expires_at\` > ? LIMIT 1`,
-        [data.sessionId, now],
-      );
-      await conn.end();
-
-      const sessions = rows as Array<Record<string, unknown>>;
-      if (!sessions || sessions.length === 0) {
-        return { success: false, session: null };
-      }
-
-      const s = sessions[0];
-      if (!s) {
-        return { success: false, session: null };
-      }
-
-      return {
-        success: true,
-        session: {
-          userId: String(s["user_id"] ?? ""),
-          userEmail: String(s["user_email"] ?? ""),
-          userName: String(s["user_name"] ?? ""),
-          userRole: String(s["user_role"] ?? "agent") as "admin" | "agent",
-          avatarUrl: (s["avatar_url"] as string) ?? null,
-        },
-      };
-    } catch (err: unknown) {
-      const e = err as { message?: string };
-      return { success: false, session: null, error: e?.message };
-    }
-  });
-
-export const deleteMySQLSession = createServerFn({ method: "POST" })
-  .validator((d: { sessionId: string }) => d)
-  .handler(async ({ data }) => {
-    try {
-      const conn = await createSingleMySQLConnection();
-      await ensureMySQLTablesExist(conn);
-      await conn.query(`DELETE FROM \`sessions\` WHERE \`id\` = ?`, [data.sessionId]);
-      await conn.end();
-      return { success: true };
-    } catch (err: unknown) {
-      const e = err as { message?: string };
-      return { success: false, error: e?.message || "Failed to delete session." };
-    }
-  });

@@ -46,6 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import { generateUUID } from "@/lib/mysql-client";
 import { useAuth } from "@/lib/auth";
+import { TermsEditor, resolveTerms, termsToSave } from "@/components/sales/terms-editor";
 import type {
   AdvancePaymentRecord,
   CrmQuotationItem,
@@ -111,6 +112,8 @@ export function EditQuotationDialog({
     parseDiscountTag(quotation.notes),
   );
   const [orderNotes, setOrderNotes] = useState(() => cleanQuotationNotes(quotation.notes));
+  // One term per line; starts from this quotation's terms (or the default list)
+  const [termsText, setTermsText] = useState(() => resolveTerms(quotation.terms).join("\n"));
   const [orderItems, setOrderItems] = useState<DialogLineItem[]>(() => {
     const items = parseItemsTag(quotation.notes);
     if (items.length > 0) return items;
@@ -319,6 +322,7 @@ export function EditQuotationDialog({
       deadline: quotation.deadline,
       created_at: toMySQLDateTime(createdAt),
       notes: buildQuotationNotes(orderNotes, specialClientDiscount, orderItems),
+      terms: termsToSave(termsText),
     });
   };
 
@@ -708,6 +712,14 @@ export function EditQuotationDialog({
                 </span>
               </div>
             </div>
+
+            <TermsEditor
+              id="edit-quotationTerms"
+              value={termsText}
+              onChange={setTermsText}
+              disabled={isSaving}
+              documentLabel="quotation"
+            />
           </div>
           <DialogFooter className="pt-3 sm:pt-4 border-t flex flex-col-reverse sm:flex-row gap-2">
             <Button

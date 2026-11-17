@@ -6,6 +6,18 @@ import { endOfDay, format, startOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+  DragOverlay,
+  type DragStartEvent,
+  type DragEndEvent,
+  type Modifier,
+} from "@dnd-kit/core";
+import {
   Check,
   CheckCircle2,
   ChevronsUpDown,
@@ -62,7 +74,9 @@ import { DateRangePicker3 } from "@/components/dashboard/date-range-picker3";
 import { AssignStageDialog, getInitials } from "@/components/orders/assign-stage-dialog";
 import { StatusReasonDialog } from "@/components/orders/status-reason-dialog";
 import { KanbanColumn } from "./kanban-column";
-import { getStageStartedAt } from "./project-card";
+import { ProjectCard } from "./project-card";
+import { getStageStartedAt } from "@/lib/orders";
+import { useSeesAllData } from "@/lib/use-data-scope";
 
 const STAGE_ICONS: Record<string, LucideIcon> = {
   "order-submitted": ClipboardCheck,
@@ -88,15 +102,50 @@ const columnIdFor = (order: CrmOrder) => {
 
 const toCsvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
+/** Prevents dragged card from ever crossing into the sidebar, header, or viewport edges */
+const restrictToBoard: Modifier = ({ transform, draggingNodeRect }) => {
+  if (!draggingNodeRect || typeof window === "undefined") return transform;
+
+  const sidebar = document.querySelector("aside");
+  const sidebarRight = sidebar ? sidebar.getBoundingClientRect().right : 0;
+  const header = document.querySelector("header");
+  const headerBottom = header ? header.getBoundingClientRect().bottom : 0;
+
+  const value = { ...transform };
+
+  // Stop card from crossing into the sidebar (left boundary)
+  if (draggingNodeRect.left + transform.x < sidebarRight + 8) {
+    value.x = sidebarRight + 8 - draggingNodeRect.left;
+  }
+
+  // Stop card from crossing off the right edge of the screen
+  if (draggingNodeRect.right + transform.x > window.innerWidth - 8) {
+    value.x = window.innerWidth - 8 - draggingNodeRect.right;
+  }
+
+  // Stop card from crossing into the top header
+  if (draggingNodeRect.top + transform.y < headerBottom + 8) {
+    value.y = headerBottom + 8 - draggingNodeRect.top;
+  }
+
+  // Stop card from crossing off the bottom edge of the screen
+  if (draggingNodeRect.bottom + transform.y > window.innerHeight - 8) {
+    value.y = window.innerHeight - 8 - draggingNodeRect.bottom;
+  }
+
+  return value;
+};
+
 /** Clone of ERPAPP `ProjectsKanbanClient2.tsx`: every order is a card in its stage column. */
 export function ProjectsKanbanBoard() {
   const { user, profile, isAdmin } = useAuth();
+  const seesAllOrders = useSeesAllData("orders");
   const {
     data: ordersData,
     isLoading,
     isFetching,
   } = useQuery({
-    ...ordersQueryOptions(user?.id, isAdmin),
+    ...ordersQueryOptions(user?.id, seesAllOrders),
     refetchInterval: 30000,
   });
   const { data: usersData } = useQuery(crmUsersQueryOptions());
@@ -112,7 +161,7 @@ export function ProjectsKanbanBoard() {
   const [selectedDateRange, setSelectedDateRange] = useState<DateRange | undefined>();
   const [selectedUserIdFilter, setSelectedUserIdFilter] = useState("all");
   const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
-  const [draggingOrder, setDraggingOrder] = useState<CrmOrder | null>(null);
+  const [activeOrder, setActiveOrder] = useState<CrmOrder | null>(null);
   const [stageAssign, setStageAssign] = useState<{ order: CrmOrder; statusId: string } | null>(
     null,
   );
@@ -120,8 +169,18 @@ export function ProjectsKanbanBoard() {
     null,
   );
 
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const autoScrollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const mouseSensor = useSensor(MouseSensor, {
+    activationConstraint: {
+      distance: 10,
+    },
+  });
+  const touchSensor = useSensor(TouchSensor, {
+    activationConstraint: {
+      delay: 250,
+      tolerance: 5,
+    },
+  });
+  const sensors = useSensors(mouseSensor, touchSensor);
 
   useEffect(() => {
     const handler = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
@@ -177,7 +236,7 @@ export function ProjectsKanbanBoard() {
   }, [filteredOrders]);
 
   const handleDropOrder = (orderId: string, statusId: string) => {
-    setDraggingOrder(null);
+    setActiveOrder(null);
     const order = orders.find((o) => o.id === orderId);
     if (!order || columnIdFor(order) === statusId) return;
     const target = resolveOrderStatus(statusId);
@@ -190,6 +249,27 @@ export function ProjectsKanbanBoard() {
       return;
     }
     updateStatusMutation.mutate({ order, statusId, changedByName });
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const order = event.active.data.current?.["order"] as CrmOrder | undefined;
+    if (order) {
+      setActiveOrder(order);
+    }
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveOrder(null);
+    if (!over) return;
+
+    const orderId = String(active.id);
+    const targetStatusId = String(over.id);
+    handleDropOrder(orderId, targetStatusId);
+  };
+
+  const handleDragCancel = () => {
+    setActiveOrder(null);
   };
 
   const handleExport = (statusId: string) => {
@@ -228,55 +308,6 @@ export function ProjectsKanbanBoard() {
       description: `Your ${stage.name} projects data is being downloaded.`,
     });
   };
-
-  const handleCardDragMove = useCallback(
-    (e: DragEvent) => {
-      if (!draggingOrder || !scrollContainerRef.current) return;
-
-      const container = scrollContainerRef.current;
-      const rect = container.getBoundingClientRect();
-      const SCROLL_THRESHOLD = 60;
-      const SCROLL_SPEED = 15;
-
-      const distFromRight = rect.right - e.clientX;
-      const distFromLeft = e.clientX - rect.left;
-
-      if (
-        distFromRight < SCROLL_THRESHOLD &&
-        container.scrollLeft < container.scrollWidth - container.clientWidth
-      ) {
-        if (!autoScrollIntervalRef.current) {
-          autoScrollIntervalRef.current = setInterval(() => {
-            container.scrollLeft += SCROLL_SPEED;
-          }, 16);
-        }
-      } else if (distFromLeft < SCROLL_THRESHOLD && container.scrollLeft > 0) {
-        if (!autoScrollIntervalRef.current) {
-          autoScrollIntervalRef.current = setInterval(() => {
-            container.scrollLeft -= SCROLL_SPEED;
-          }, 16);
-        }
-      } else {
-        if (autoScrollIntervalRef.current) {
-          clearInterval(autoScrollIntervalRef.current);
-          autoScrollIntervalRef.current = null;
-        }
-      }
-    },
-    [draggingOrder],
-  );
-
-  useEffect(() => {
-    if (!draggingOrder) return undefined;
-    document.addEventListener("dragover", handleCardDragMove);
-    return () => {
-      document.removeEventListener("dragover", handleCardDragMove);
-      if (autoScrollIntervalRef.current) {
-        clearInterval(autoScrollIntervalRef.current);
-        autoScrollIntervalRef.current = null;
-      }
-    };
-  }, [draggingOrder, handleCardDragMove]);
 
   return (
     <div className="flex flex-col h-full space-y-4">
@@ -414,40 +445,52 @@ export function ProjectsKanbanBoard() {
         )}
       </div>
 
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 min-h-0 overflow-x-auto pb-4 custom-scrollbar"
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        modifiers={[restrictToBoard]}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
       >
-        <div className="flex space-x-4 h-full min-w-max">
-          {ORDER_STATUSES.map((stage) => (
-            <KanbanColumn
-              key={stage.id}
-              id={stage.id}
-              title={stage.name}
-              icon={STAGE_ICONS[stage.id] || ClipboardCheck}
-              color={stage.color}
-              orders={ordersByStatus[stage.id] || []}
-              isLoading={isLoading}
-              draggingOrderId={draggingOrder?.id || null}
-              onDropOrder={handleDropOrder}
-              onAssign={(order) => setStageAssign({ order, statusId: columnIdFor(order) })}
-              onCardDragStart={setDraggingOrder}
-              onCardDragEnd={() => setDraggingOrder(null)}
-            />
-          ))}
-        </div>
-        {filteredOrders.length === 0 && !isLoading && (
-          <div className="text-center py-10 text-muted-foreground mt-8">
-            <ClipboardCheck className="mx-auto h-16 w-16 opacity-30 mb-4" />
-            <p className="text-xl font-semibold">No projects found.</p>
-            <p className="text-sm">
-              {searchTerm
-                ? "Try adjusting your filters or search term."
-                : "Get started by adding new orders."}
-            </p>
+        <div className="flex-1 min-h-0 overflow-x-auto pb-4 custom-scrollbar">
+          <div className="flex space-x-4 h-full min-w-max">
+            {ORDER_STATUSES.map((stage) => (
+              <KanbanColumn
+                key={stage.id}
+                id={stage.id}
+                title={stage.name}
+                icon={STAGE_ICONS[stage.id] || ClipboardCheck}
+                color={stage.color}
+                orders={ordersByStatus[stage.id] || []}
+                isLoading={isLoading}
+                onAssign={(order) => setStageAssign({ order, statusId: columnIdFor(order) })}
+              />
+            ))}
           </div>
-        )}
-      </div>
+          {filteredOrders.length === 0 && !isLoading && (
+            <div className="text-center py-10 text-muted-foreground mt-8">
+              <ClipboardCheck className="mx-auto h-16 w-16 opacity-30 mb-4" />
+              <p className="text-xl font-semibold">No projects found.</p>
+              <p className="text-sm">
+                {searchTerm
+                  ? "Try adjusting your filters or search term."
+                  : "Get started by adding new orders."}
+              </p>
+            </div>
+          )}
+        </div>
+
+        <DragOverlay modifiers={[restrictToBoard]} zIndex={20} dropAnimation={null}>
+          {activeOrder ? (
+            <ProjectCard
+              order={activeOrder}
+              isOverlay
+              onAssign={(order) => setStageAssign({ order, statusId: columnIdFor(order) })}
+            />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
 
       {reasonTarget && (
         <StatusReasonDialog

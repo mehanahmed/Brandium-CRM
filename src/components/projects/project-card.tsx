@@ -2,25 +2,20 @@
 
 import { memo, useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  addHours,
-  differenceInSeconds,
-  format,
-  formatDistanceToNowStrict,
-  isAfter,
-} from "date-fns";
+import { useDraggable } from "@dnd-kit/core";
+import { differenceInSeconds, format, formatDistanceToNowStrict, isAfter } from "date-fns";
 import { Building2, CalendarDays, Phone, ReceiptText, Star } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { ORDER_STATUSES, resolveOrderStatus, type CrmOrder } from "@/lib/orders";
+import {
+  getStageDeadline,
+  getStageStartedAt,
+  resolveOrderStatus,
+  type CrmOrder,
+} from "@/lib/orders";
 import { getInitials } from "@/components/orders/assign-stage-dialog";
-
-/** Stages that run on the clock; Delivered has no SLA bar. */
-const SLA_STAGES = ORDER_STATUSES.filter((s) => s.id !== "delivered");
-/** Default per-stage SLA when the order has no delivery date. */
-const DEFAULT_STAGE_SLA_HOURS = 48;
 
 const StopwatchIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg
@@ -58,15 +53,6 @@ const formatSlaHours = (hours: number): string => {
   return `${d}d ${h}H SLA`;
 };
 
-/** When the order entered its current stage (latest matching history entry). */
-export const getStageStartedAt = (order: CrmOrder): string => {
-  const current = resolveOrderStatus(order.status).id;
-  const entry = [...order.status_history]
-    .reverse()
-    .find((h) => resolveOrderStatus(h.status).id === current);
-  return entry?.timestamp || order.updated_at || order.created_at;
-};
-
 interface ProgressInfo {
   showProgressBar: boolean;
   percentage: number;
@@ -80,8 +66,8 @@ interface ProgressInfo {
  * working stages; otherwise each stage gets DEFAULT_STAGE_SLA_HOURS.
  */
 const calculateProgressInfo = (order: CrmOrder, now: Date): ProgressInfo => {
-  const status = resolveOrderStatus(order.status);
-  if (status.id === "delivered") {
+  const deadline = getStageDeadline(order);
+  if (!deadline) {
     const deliveredAt = getStageStartedAt(order);
     return {
       showProgressBar: false,
@@ -92,20 +78,7 @@ const calculateProgressInfo = (order: CrmOrder, now: Date): ProgressInfo => {
     };
   }
 
-  const stageStart = new Date(getStageStartedAt(order));
-  let target: Date;
-  let slaHours: number;
-  if (order.delivery_date) {
-    const projectStart = new Date(order.created_at);
-    const projectEnd = new Date(order.delivery_date);
-    const totalDays = Math.max(1, differenceInSeconds(projectEnd, projectStart) / 86400);
-    const allocatedDays = totalDays / SLA_STAGES.length;
-    slaHours = Math.max(1, Math.round(allocatedDays * 24));
-    target = new Date(stageStart.getTime() + Math.round(allocatedDays * 86400000));
-  } else {
-    slaHours = DEFAULT_STAGE_SLA_HOURS;
-    target = addHours(stageStart, slaHours);
-  }
+  const { start: stageStart, target, slaHours } = deadline;
 
   const sla = ` (${formatSlaHours(slaHours)})`;
   if (isAfter(now, target)) {
@@ -128,22 +101,35 @@ const calculateProgressInfo = (order: CrmOrder, now: Date): ProgressInfo => {
   };
 };
 
-interface ProjectCardProps {
+export interface ProjectCardProps {
   order: CrmOrder;
+  isOverlay?: boolean;
   isDragging?: boolean;
   onAssign: (order: CrmOrder) => void;
-  onDragStart: (order: CrmOrder) => void;
-  onDragEnd: () => void;
+  onDragStart?: (order: CrmOrder) => void;
+  onDragEnd?: () => void;
 }
 
 /** Clone of ERPAPP `ProjectCard.tsx` for an order on the projects Kanban. */
 function ProjectCardComponent({
   order,
+  isOverlay = false,
   isDragging = false,
   onAssign,
-  onDragStart,
-  onDragEnd,
 }: ProjectCardProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    isDragging: isDndDragging,
+  } = useDraggable({
+    id: order.id,
+    data: { order },
+    disabled: isOverlay,
+  });
+
+  const dragging = !isOverlay && (isDragging || isDndDragging);
+
   const [progressInfo, setProgressInfo] = useState<ProgressInfo>(() =>
     calculateProgressInfo(order, new Date()),
   );
@@ -162,24 +148,19 @@ function ProjectCardComponent({
 
   return (
     <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.setData("text/plain", order.id);
-        e.dataTransfer.effectAllowed = "move";
-        onDragStart(order);
-      }}
-      onDragEnd={onDragEnd}
+      ref={!isOverlay ? setNodeRef : null}
+      {...(!isOverlay ? { ...attributes, ...listeners } : {})}
       className={cn(
-        "relative group transition-all duration-150",
-        isDragging ? "opacity-40 scale-[1.02]" : "opacity-100",
+        "relative group transition-all duration-150 select-none",
+        dragging && "opacity-40",
+        isOverlay && "cursor-grabbing shadow-2xl scale-105 rotate-1 z-10 pointer-events-none",
       )}
     >
       <Card
         className={cn(
-          "bg-card w-full py-0 shadow-xs hover:shadow-md transition-shadow",
-          isDragging
-            ? "ring-2 ring-[#67B239] cursor-grabbing"
-            : "cursor-grab active:cursor-grabbing",
+          "bg-card w-full py-0 shadow-xs transition-shadow",
+          !isOverlay && "cursor-grab active:cursor-grabbing hover:shadow-md",
+          isOverlay && "ring-2 ring-[#67B239] shadow-2xl bg-card/95 backdrop-blur-sm",
         )}
       >
         <CardContent className="p-3 space-y-2.5">

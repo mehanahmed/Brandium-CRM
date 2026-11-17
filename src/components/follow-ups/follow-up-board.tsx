@@ -6,17 +6,38 @@ import { endOfDay, format, startOfDay } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
 import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  closestCorners,
+  DragOverlay,
+  useDroppable,
+  type DragStartEvent,
+  type DragEndEvent,
+  type Modifier,
+} from "@dnd-kit/core";
+import {
   ArrowRight,
   Calendar as CalendarIcon,
-  CheckCircle2,
-  Clock,
+  CalendarCheck,
+  CalendarClock,
   Download,
-  Settings2,
+  FileText,
+  LayoutGrid,
   Loader2,
   PhoneCall,
+  PhoneMissed,
+  PhoneOff,
+  PowerOff,
   Search,
+  ShieldAlert,
+  Sparkles,
+  Trophy,
   TriangleAlert,
-  XCircle,
+  UserPlus,
+  UserX,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,7 +63,11 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { DateRangePicker3 } from "@/components/dashboard/date-range-picker3";
+import {
+  FollowUpDateRangePicker,
+  type FollowUpDateFilterValue,
+  isFollowUpInDateFilter,
+} from "./follow-up-date-range-picker";
 import { useAuth } from "@/lib/auth";
 import {
   followUpBoardQueryOptions,
@@ -54,32 +79,76 @@ import {
   type FollowUpStage,
 } from "@/lib/follow-ups";
 import { getContrastTextColor } from "@/lib/orders";
-import { parseNotesToItems } from "@/lib/stages";
+import { resolveStageIcon } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 import { FollowUpCard, formatFollowUpDate } from "./follow-up-card";
-import { ManageFollowUpStagesDialog } from "./manage-follow-up-stages-dialog";
+import { ChangeStageDialog } from "@/components/change-stage-dialog";
+import { LeadCalendarView } from "@/components/pipeline/LeadCalendarView";
+import type { Lead } from "@/types";
+import { useSeesAllData } from "@/lib/use-data-scope";
 
 type SearchField = "all" | "name" | "phone";
 
+// Same icons as the prospect pipeline (`resolveStageIcon` names)
 const STAGE_ICONS: Record<string, LucideIcon> = {
-  pending: Clock,
-  inprogress: PhoneCall,
-  completed: CheckCircle2,
-  canceled: XCircle,
-  cancelled: XCircle,
+  UserPlus,
+  CalendarClock,
+  CalendarCheck,
+  FileText,
+  Sparkles,
+  Trophy,
+  PhoneMissed,
+  PowerOff,
+  PhoneOff,
+  ShieldAlert,
+  UserX,
 };
 
-const stageIcon = (name: string) =>
-  STAGE_ICONS[name.toLowerCase().replace(/[^a-z]/g, "")] || PhoneCall;
+const stageIcon = (name: string) => STAGE_ICONS[resolveStageIcon(name)] || PhoneCall;
 
 const toCsvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
 
-/** Clone of ERPAPP `FollowUpKanbanClient.tsx`: one card per prospect, grouped by follow-up status. */
+/** Prevents dragged card from ever crossing into the sidebar, header, or viewport edges */
+const restrictToBoard: Modifier = ({ transform, draggingNodeRect }) => {
+  if (!draggingNodeRect || typeof window === "undefined") return transform;
+
+  const sidebar = document.querySelector("aside");
+  const sidebarRight = sidebar ? sidebar.getBoundingClientRect().right : 0;
+  const header = document.querySelector("header");
+  const headerBottom = header ? header.getBoundingClientRect().bottom : 0;
+
+  const value = { ...transform };
+
+  // Stop card from crossing into the sidebar (left boundary)
+  if (draggingNodeRect.left + transform.x < sidebarRight + 8) {
+    value.x = sidebarRight + 8 - draggingNodeRect.left;
+  }
+
+  // Stop card from crossing off the right edge of the screen
+  if (draggingNodeRect.right + transform.x > window.innerWidth - 8) {
+    value.x = window.innerWidth - 8 - draggingNodeRect.right;
+  }
+
+  // Stop card from crossing into the top header
+  if (draggingNodeRect.top + transform.y < headerBottom + 8) {
+    value.y = headerBottom + 8 - draggingNodeRect.top;
+  }
+
+  // Stop card from crossing off the bottom edge of the screen
+  if (draggingNodeRect.bottom + transform.y > window.innerHeight - 8) {
+    value.y = window.innerHeight - 8 - draggingNodeRect.bottom;
+  }
+
+  return value;
+};
+
+/** Clone of ERPAPP `FollowUpKanbanClient.tsx`: one card per prospect, grouped by its pipeline stage. */
 export function FollowUpBoard() {
   const { user, profile, isAdmin } = useAuth();
+  const seesAllLeads = useSeesAllData("leads");
   const userName = profile?.full_name || "Admin";
   const { data: itemsData, isLoading } = useQuery({
-    ...followUpBoardQueryOptions(user?.id, isAdmin),
+    ...followUpBoardQueryOptions(user?.id, seesAllLeads),
     enabled: !!user,
     refetchInterval: 30000,
   });
@@ -92,24 +161,39 @@ export function FollowUpBoard() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [searchField, setSearchField] = useState<SearchField>("all");
-  const [selectedDateRange, setSelectedDateRange] = useState<DateRange | undefined>();
-  const [draggingItem, setDraggingItem] = useState<FollowUpBoardItem | null>(null);
+  const [dateFilter, setDateFilter] = useState<FollowUpDateFilterValue>({
+    type: "all",
+    label: "All Scheduled Dates",
+  });
+  const [activeFollowUp, setActiveFollowUp] = useState<FollowUpBoardItem | null>(null);
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 10,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 250,
+        tolerance: 5,
+      },
+    }),
+  );
   const [noteTarget, setNoteTarget] = useState<{
     item: FollowUpBoardItem;
-    status: string;
+    stage: FollowUpStage;
   } | null>(null);
-  const [timelineItem, setTimelineItem] = useState<FollowUpBoardItem | null>(null);
+  const [leadDetailsItem, setLeadDetailsItem] = useState<FollowUpBoardItem | null>(null);
   const [deleteItem, setDeleteItem] = useState<FollowUpBoardItem | null>(null);
-  const [isManageOpen, setIsManageOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"kanban" | "calendar">("kanban");
 
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return items.filter((item) => {
-      if (selectedDateRange?.from) {
-        const start = startOfDay(selectedDateRange.from).getTime();
-        const end = endOfDay(selectedDateRange.to || selectedDateRange.from).getTime();
-        const t = new Date(item.due_at).getTime();
-        if (Number.isNaN(t) || t < start || t > end) return false;
+      // Filter by scheduled follow-up date
+      if (!isFollowUpInDateFilter(item.due_at, dateFilter)) {
+        return false;
       }
       if (!term) return true;
       const name = `${item.business_name} ${item.contact_name}`.toLowerCase();
@@ -120,7 +204,7 @@ export function FollowUpBoard() {
         name.includes(term) || phone.includes(term) || item.address.toLowerCase().includes(term)
       );
     });
-  }, [items, searchTerm, searchField, selectedDateRange]);
+  }, [items, searchTerm, searchField, dateFilter]);
 
   const itemsByStage = useMemo(() => {
     const grouped: Record<string, FollowUpBoardItem[]> = {};
@@ -132,31 +216,58 @@ export function FollowUpBoard() {
     return grouped;
   }, [filteredItems, stages]);
 
-  // Unfiltered: column management must see every card, not only the searched ones
-  const itemIdsByStage = useMemo(() => {
-    const grouped: Record<string, string[]> = {};
-    items.forEach((item) => {
-      const stage = followUpStageFor(item.status, stages);
-      if (stage) (grouped[stage.id] ||= []).push(item.id);
-    });
-    return grouped;
-  }, [items, stages]);
+  const calendarLeads = useMemo<Lead[]>(() => {
+    return filteredItems.map((item) => ({
+      id: item.id,
+      contactName: item.contact_name || item.business_name || "Lead",
+      businessName: item.business_name || item.contact_name || "",
+      phone: item.phone,
+      address: item.address,
+      category: followUpStageFor(item.status, stages)?.name || item.status,
+      schedule: item.due_at,
+      customerType: item.agent_name || "Follow-up",
+      notes: item.note,
+      rawItem: item,
+    }));
+  }, [filteredItems, stages]);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    const item = event.active.data.current?.["followUp"] as FollowUpBoardItem | undefined;
+    if (item) setActiveFollowUp(item);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    setActiveFollowUp(null);
+    const { active, over } = event;
+    if (!over) return;
+
+    const targetStageId = String(over.id);
+    const targetStage = stages.find((s) => s.id === targetStageId);
+    if (!targetStage) return;
+
+    handleDrop(String(active.id), targetStage);
+  };
+
+  const handleDragCancel = () => {
+    setActiveFollowUp(null);
+  };
 
   const handleDrop = (itemId: string, stage: FollowUpStage) => {
-    setDraggingItem(null);
+    setActiveFollowUp(null);
     const item = items.find((i) => i.id === itemId);
     if (!item || followUpStageFor(item.status, stages)?.id === stage.id) return;
-    setNoteTarget({ item, status: stage.name });
+    setNoteTarget({ item, stage });
   };
 
   const handleConfirmNote = async (notes: string, nextDueAt: string) => {
     if (!noteTarget) return;
-    const { item, status } = noteTarget;
-    const isStageChange = followUpStageFor(item.status, stages)?.name !== status;
+    const { item, stage } = noteTarget;
+    const isStageChange = followUpStageFor(item.status, stages)?.id !== stage.id;
     try {
       await updateMutation.mutateAsync({
         item,
-        status,
+        status: stage.id,
+        statusName: stage.name,
         notes,
         nextDueAt,
         userId: user?.id,
@@ -164,7 +275,7 @@ export function FollowUpBoard() {
       });
       toast.success(isStageChange ? "Status Updated" : "Update Saved", {
         description: isStageChange
-          ? `Record moved to ${status}.`
+          ? `Prospect moved to ${stage.name}.`
           : "The activity update has been recorded.",
       });
       setNoteTarget(null);
@@ -251,23 +362,45 @@ export function FollowUpBoard() {
               <SelectItem value="phone">Phone</SelectItem>
             </SelectContent>
           </Select>
-          <DateRangePicker3
-            initialRange={selectedDateRange}
-            onDateRangeChange={(range) => setSelectedDateRange(range)}
-            align="start"
-            className="bg-card border-border/50 rounded-xl h-10"
+          <FollowUpDateRangePicker
+            value={dateFilter}
+            onChange={setDateFilter}
+            totalFilteredCount={filteredItems.length}
+            className="rounded-xl h-10 w-full sm:w-auto"
           />
         </div>
-        {isAdmin && (
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
+          {/* View mode toggle: Kanban or Calendar */}
+          <div className="flex items-center bg-muted/60 dark:bg-slate-800 p-1 rounded-xl border border-border/40">
             <Button
-              variant="outline"
-              onClick={() => setIsManageOpen(true)}
-              className="h-10 px-4 rounded-xl border-dashed border-2 bg-card gap-2 hover:border-[#67B239] hover:text-[#55962e] cursor-pointer"
+              type="button"
+              variant={viewMode === "kanban" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("kanban")}
+              className={cn(
+                "h-8 px-3 rounded-lg text-xs font-semibold gap-1.5 cursor-pointer",
+                viewMode === "kanban" && "bg-white dark:bg-slate-900 shadow-xs",
+              )}
             >
-              <Settings2 className="h-4 w-4" />
-              Columns
+              <LayoutGrid className="h-4 w-4" />
+              <span className="hidden sm:inline">Kanban</span>
             </Button>
+            <Button
+              type="button"
+              variant={viewMode === "calendar" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("calendar")}
+              className={cn(
+                "h-8 px-3 rounded-lg text-xs font-semibold gap-1.5 cursor-pointer",
+                viewMode === "calendar" && "bg-white dark:bg-slate-900 shadow-xs",
+              )}
+            >
+              <CalendarIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Calendar</span>
+            </Button>
+          </div>
+
+          {isAdmin && (
             <Button
               variant="outline"
               onClick={handleExport}
@@ -277,57 +410,71 @@ export function FollowUpBoard() {
               <Download className="h-4 w-4 text-emerald-600" />
               Export
             </Button>
-          </div>
-        )}
-      </div>
-
-      <div className="flex-1 min-h-0 overflow-x-auto pb-4 custom-scrollbar">
-        <div className="flex space-x-4 h-full min-w-max">
-          {stages.map((stage) => (
-            <FollowUpColumn
-              key={stage.id}
-              stage={stage}
-              items={itemsByStage[stage.id] || []}
-              isLoading={isLoading}
-              isAdmin={isAdmin}
-              draggingItemId={draggingItem?.id || null}
-              onDrop={handleDrop}
-              onCardDragStart={setDraggingItem}
-              onCardDragEnd={() => setDraggingItem(null)}
-              onAddUpdate={(item) =>
-                setNoteTarget({
-                  item,
-                  status: followUpStageFor(item.status, stages)?.name || item.status,
-                })
-              }
-              onViewTimeline={setTimelineItem}
-              onDelete={setDeleteItem}
-            />
-          ))}
+          )}
         </div>
       </div>
 
-      {noteTarget && (
-        <FollowUpNoteDialog
-          key={`${noteTarget.item.id}-${noteTarget.status}`}
-          businessName={noteTarget.item.business_name || noteTarget.item.contact_name}
-          fromStatus={noteFromStage?.name || noteTarget.item.status}
-          toStatus={noteTarget.status}
-          isSaving={updateMutation.isPending}
-          onCancel={() => setNoteTarget(null)}
-          onConfirm={handleConfirmNote}
+      {viewMode === "kanban" ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          modifiers={[restrictToBoard]}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={handleDragCancel}
+        >
+          <div className="flex-1 min-h-0 overflow-x-auto pb-4 custom-scrollbar">
+            <div className="flex space-x-4 h-full min-w-max">
+              {stages.map((stage) => (
+                <FollowUpColumn
+                  key={stage.id}
+                  stage={stage}
+                  stages={stages}
+                  items={itemsByStage[stage.id] || []}
+                  isLoading={isLoading}
+                  isAdmin={isAdmin}
+                  onMoveToStage={(item, targetStage) => handleDrop(item.id, targetStage)}
+                  onAddUpdate={(item) => setNoteTarget({ item, stage })}
+                  onViewDetails={setLeadDetailsItem}
+                  onDelete={setDeleteItem}
+                />
+              ))}
+            </div>
+          </div>
+
+          <DragOverlay modifiers={[restrictToBoard]} zIndex={20} dropAnimation={null}>
+            {activeFollowUp ? (
+              <FollowUpCard
+                followUp={activeFollowUp}
+                statusColor={followUpStageFor(activeFollowUp.status, stages)?.color || "#67B239"}
+                isOverlay
+                isAdmin={isAdmin}
+                stages={stages}
+              />
+            ) : null}
+          </DragOverlay>
+        </DndContext>
+      ) : (
+        <LeadCalendarView
+          leads={calendarLeads}
+          onViewLead={(lead) => {
+            const rawItem = (lead as any).rawItem || items.find((i) => i.id === lead.id);
+            if (rawItem) {
+              setLeadDetailsItem(rawItem);
+            }
+          }}
         />
       )}
 
-      <FollowUpTimelineDialog item={timelineItem} onClose={() => setTimelineItem(null)} />
-
-      {isAdmin && isManageOpen && (
-        <ManageFollowUpStagesDialog
-          open={isManageOpen}
-          onOpenChange={setIsManageOpen}
-          stages={stages}
-          itemIdsByStage={itemIdsByStage}
-          userId={user?.id}
+      {noteTarget && (
+        <FollowUpNoteDialog
+          key={`${noteTarget.item.id}-${noteTarget.stage.id}`}
+          businessName={noteTarget.item.business_name || noteTarget.item.contact_name}
+          fromStatus={noteFromStage?.name || noteTarget.item.status}
+          toStatus={noteTarget.stage.name}
+          isSaving={updateMutation.isPending}
+          onCancel={() => setNoteTarget(null)}
+          onConfirm={handleConfirmNote}
         />
       )}
 
@@ -370,62 +517,59 @@ export function FollowUpBoard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ChangeStageDialog
+        target={
+          leadDetailsItem
+            ? {
+                id: leadDetailsItem.prospect_id,
+                label: leadDetailsItem.contact_name || leadDetailsItem.business_name,
+                stageId: leadDetailsItem.status,
+              }
+            : null
+        }
+        onOpenChange={(open) => {
+          if (!open) setLeadDetailsItem(null);
+        }}
+      />
     </div>
   );
 }
 
 const ITEMS_PER_PAGE = 20;
 
-/** Clone of ERPAPP `FollowUpKanbanColumn.tsx`, using native HTML5 drag-and-drop. */
+/** Clone of ERPAPP `FollowUpKanbanColumn.tsx`, using @dnd-kit/core droppable. */
 function FollowUpColumn({
   stage,
+  stages,
   items,
   isLoading,
   isAdmin,
-  draggingItemId,
-  onDrop,
-  onCardDragStart,
-  onCardDragEnd,
+  onMoveToStage,
   onAddUpdate,
-  onViewTimeline,
+  onViewDetails,
   onDelete,
 }: {
   stage: FollowUpStage;
+  stages: FollowUpStage[];
   items: FollowUpBoardItem[];
   isLoading: boolean;
   isAdmin: boolean;
-  draggingItemId: string | null;
-  onDrop: (itemId: string, stage: FollowUpStage) => void;
-  onCardDragStart: (item: FollowUpBoardItem) => void;
-  onCardDragEnd: () => void;
+  onMoveToStage: (item: FollowUpBoardItem, stage: FollowUpStage) => void;
   onAddUpdate: (item: FollowUpBoardItem) => void;
-  onViewTimeline: (item: FollowUpBoardItem) => void;
+  onViewDetails?: (item: FollowUpBoardItem) => void;
   onDelete: (item: FollowUpBoardItem) => void;
 }) {
-  const [isOver, setIsOver] = useState(false);
+  const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [visibleCount, setVisibleCount] = useState(ITEMS_PER_PAGE);
   const Icon = stageIcon(stage.name);
   const textColor = getContrastTextColor(stage.color);
 
   return (
     <div
-      onDragOver={(e) => {
-        if (!draggingItemId) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (!isOver) setIsOver(true);
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsOver(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setIsOver(false);
-        const itemId = e.dataTransfer.getData("text/plain") || draggingItemId;
-        if (itemId) onDrop(itemId, stage);
-      }}
+      ref={setNodeRef}
       className={cn(
-        "w-72 sm:w-75 shrink-0 flex flex-col bg-muted/30 rounded-lg overflow-hidden transition-all duration-200 ease-in-out h-full border",
+        "w-72 sm:w-80 shrink-0 flex flex-col bg-muted/30 rounded-lg overflow-hidden transition-all duration-200 ease-in-out h-full border",
         isOver
           ? "border-[#67B239] ring-2 ring-[#67B239] shadow-xl scale-[1.01]"
           : "border-border/30 shadow-xs",
@@ -465,12 +609,11 @@ function FollowUpColumn({
                   key={item.id}
                   followUp={item}
                   statusColor={stage.color}
-                  isDragging={draggingItemId === item.id}
                   isAdmin={isAdmin}
-                  onDragStart={onCardDragStart}
-                  onDragEnd={onCardDragEnd}
+                  stages={stages}
+                  onMoveToStage={onMoveToStage}
                   onAddUpdate={onAddUpdate}
-                  onViewTimeline={onViewTimeline}
+                  onViewDetails={onViewDetails}
                   onDelete={onDelete}
                 />
               ))
@@ -636,86 +779,6 @@ function FollowUpNoteDialog({
             )}
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** ERPAPP card "Activity Timeline": the follow-up's stage-history notes, newest first. */
-function FollowUpTimelineDialog({
-  item,
-  onClose,
-}: {
-  item: FollowUpBoardItem | null;
-  onClose: () => void;
-}) {
-  const notes = useMemo(
-    () =>
-      item
-        ? parseNotesToItems(item.note, item.changed_at, item.creator_name, item.creator_avatar)
-            .slice()
-            .reverse()
-        : [],
-    [item],
-  );
-
-  return (
-    <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md p-0 overflow-hidden gap-0">
-        <DialogHeader className="px-6 py-5 border-b border-border/50 bg-muted/30">
-          <DialogTitle className="flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-foreground/70">
-            <span className="h-2 w-2 rounded-full bg-[#67B239] animate-pulse" />
-            Activity Timeline
-          </DialogTitle>
-          <DialogDescription>
-            {item?.business_name || item?.contact_name} — follow-up on{" "}
-            {item ? formatFollowUpDate(item.due_at, "dd MMM yyyy, h:mm a") : ""}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="h-112.5 w-full overflow-y-auto overflow-x-hidden custom-scrollbar">
-          <div className="p-8 relative">
-            {notes.length === 0 ? (
-              <p className="text-center text-xs text-muted-foreground italic py-10">
-                No activity recorded yet.
-              </p>
-            ) : (
-              <>
-                <div className="absolute left-9.25 top-8 bottom-8 w-px bg-border/60" />
-                <div className="space-y-8">
-                  {notes.map((log, idx) => (
-                    <div key={log.id || idx} className="relative flex gap-5">
-                      <div className="relative z-10 mt-1.5">
-                        <div className="h-2.5 w-2.5 rounded-full border-2 border-background bg-[#67B239] shadow-[0_0_0_4px_rgba(103,178,57,0.15)]" />
-                      </div>
-                      <div className="flex-1 space-y-2 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-bold text-foreground/90 truncate">
-                            {log.createdByName || "System"}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground/70 font-medium shrink-0">
-                            {log.createdAt
-                              ? formatFollowUpDate(log.createdAt, "h:mm a, MMM dd")
-                              : ""}
-                          </span>
-                        </div>
-                        <div className="bg-muted/40 rounded-2xl p-3 border border-border/30 shadow-xs">
-                          <p className="text-[11px] text-muted-foreground font-medium leading-relaxed whitespace-pre-wrap wrap-anywhere">
-                            {log.text}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="p-4 border-t border-border/50 flex justify-center">
-          <Button variant="outline" onClick={onClose} className="rounded-2xl px-8 cursor-pointer">
-            Close Timeline
-          </Button>
-        </div>
       </DialogContent>
     </Dialog>
   );

@@ -25,6 +25,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useSeesAllData } from "@/lib/use-data-scope";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +74,8 @@ import {
 
 export default function ExpensesPage() {
   const { user, isAdmin } = useAuth();
+  const seesAllOrders = useSeesAllData("orders");
+  const seesAllExpenses = useSeesAllData("expenses");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [paymentMethod, setPaymentMethod] = useState("all");
@@ -129,12 +132,12 @@ export default function ExpensesPage() {
 
   const range = { from: fromDate || undefined, to: toDate || undefined };
   const ordersQuery = useQuery({
-    ...ordersQueryOptions(user?.id, isAdmin),
+    ...ordersQueryOptions(user?.id, seesAllOrders),
     enabled: Boolean(user?.id),
   });
   const income = computeFinanceSummary(ordersQuery.data ?? [], range);
   const expenseTotal = useQuery({
-    ...dashboardExpenseQuery(range, isAdmin ? undefined : user?.id),
+    ...dashboardExpenseQuery(range, seesAllExpenses ? undefined : user?.id),
     enabled: Boolean(user?.id),
   });
 

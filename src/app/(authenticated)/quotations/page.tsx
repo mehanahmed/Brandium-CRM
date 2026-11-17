@@ -17,6 +17,7 @@ import {
   Check,
   PlusCircle,
 } from "lucide-react";
+import { useSeesAllData } from "@/lib/use-data-scope";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,6 +77,10 @@ import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { CreateQuotationDialog } from "@/components/quotations/create-quotation-dialog";
 import { EditQuotationDialog } from "@/components/quotations/edit-quotation-dialog";
+import {
+  QuotationSummaryCards,
+  type QuotationStats,
+} from "@/components/quotations/quotation-summary-cards";
 
 const ITEMS_PER_PAGE = 25;
 
@@ -102,205 +107,13 @@ function formatQuotationCardDate(dateInput?: string | Date | null): string {
   }
 }
 
-const DEMO_QUOTATIONS: CrmQuotationItem[] = [
-  {
-    id: "demo-prj-1",
-    quotation_code: "12145",
-    title: "Truelysell",
-    business_name: "Truelysell",
-    contact_name: "Truelysell",
-    client_name: "Truelysell",
-    client_phone: "+1 234 567 890",
-    client_email: "truelysell@example.com",
-    client_address: null,
-    service_id: "srv-web-app",
-    service_name: "Web App",
-    stage_id: "Draft",
-    stage_name: "Draft",
-    stage_group: "in_progress",
-    stage_color: "#3B82F6",
-    stage_icon: "PlayCircle",
-    priority: "High",
-    assigned_agent_id: "agent-1",
-    assigned_agent_name: "Agent One",
-    assigned_agent_avatar:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-    assigned_artist_id: "artist-1",
-    assigned_artist_name: "Artist One",
-    assigned_artist_avatar:
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80",
-    created_by: "a0000000-0000-4000-8000-000000000001",
-    creator_name: "Mehan Ahmed",
-    creator_avatar:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-    budget: 350000,
-    paid_amount: 150000,
-    due_amount: 200000,
-    progress: 15,
-    order_date: "2023-10-01",
-    deadline: "2023-10-15",
-    assignees: [
-      {
-        id: "artist-1",
-        name: "Artist One",
-        avatar:
-          "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80",
-        role: "artist",
-      },
-      {
-        id: "agent-1",
-        name: "Agent One",
-        avatar:
-          "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-        role: "agent",
-      },
-    ],
-    assigned_user_ids: ["artist-1", "agent-1"],
-    notes: "Kofejob is a freelancers marketplace where you can post quotations & get instant help.",
-    created_at: "2023-10-01T00:00:00.000Z",
-    updated_at: "2023-10-01T00:00:00.000Z",
-  },
-  {
-    id: "demo-prj-2",
-    quotation_code: "12145",
-    title: "Dreamschat",
-    business_name: "Dreamschat",
-    contact_name: "Dreamschat",
-    client_name: "Dreamschat",
-    client_phone: "+1 234 567 891",
-    client_email: "dreamschat@example.com",
-    client_address: null,
-    service_id: "srv-web-app",
-    service_name: "Web App",
-    stage_id: "Sent",
-    stage_name: "Sent",
-    stage_group: "in_progress",
-    stage_color: "#8B5CF6",
-    stage_icon: "FileText",
-    priority: "High",
-    assigned_agent_id: "agent-2",
-    assigned_agent_name: "Agent Two",
-    assigned_agent_avatar:
-      "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100&auto=format&fit=crop&q=80",
-    assigned_artist_id: "artist-2",
-    assigned_artist_name: "Artist Two",
-    assigned_artist_avatar:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80",
-    created_by: "a0000000-0000-4000-8000-000000000001",
-    creator_name: "Mehan Ahmed",
-    creator_avatar:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-    budget: 215000,
-    paid_amount: 100000,
-    due_amount: 115000,
-    progress: 30,
-    order_date: "2023-10-01",
-    deadline: "2023-10-19",
-    assignees: [
-      {
-        id: "artist-2",
-        name: "Artist Two",
-        avatar:
-          "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80",
-        role: "artist",
-      },
-    ],
-    assigned_user_ids: ["artist-2"],
-    notes: "Kofejob is a freelancers marketplace where you can post quotations & get instant help.",
-    created_at: "2023-10-01T00:00:00.000Z",
-    updated_at: "2023-10-01T00:00:00.000Z",
-  },
-  {
-    id: "demo-prj-3",
-    quotation_code: "12147",
-    title: "Truelysell",
-    business_name: "Truelysell Portal",
-    contact_name: "Truelysell",
-    client_name: "Truelysell",
-    client_phone: "+1 234 567 892",
-    client_email: "truelysell2@example.com",
-    client_address: null,
-    service_id: "srv-web-app",
-    service_name: "Web App",
-    stage_id: "Under Review",
-    stage_name: "Under Review",
-    stage_group: "in_progress",
-    stage_color: "#F59E0B",
-    stage_icon: "Video",
-    priority: "High",
-    assigned_agent_id: "agent-3",
-    assigned_agent_name: "Agent Three",
-    assigned_agent_avatar:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&auto=format&fit=crop&q=80",
-    assigned_artist_id: "artist-3",
-    assigned_artist_name: "Artist Three",
-    assigned_artist_avatar:
-      "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100&auto=format&fit=crop&q=80",
-    created_by: "a0000000-0000-4000-8000-000000000001",
-    creator_name: "Mehan Ahmed",
-    creator_avatar:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-    budget: 145000,
-    paid_amount: 80000,
-    due_amount: 65000,
-    progress: 50,
-    order_date: "2023-10-01",
-    deadline: "2023-10-12",
-    assignees: [],
-    assigned_user_ids: [],
-    notes: "Kofejob is a freelancers marketplace where you can post quotations & get instant help.",
-    created_at: "2023-10-01T00:00:00.000Z",
-    updated_at: "2023-10-01T00:00:00.000Z",
-  },
-  {
-    id: "demo-prj-4",
-    quotation_code: "12148",
-    title: "Servbook",
-    business_name: "Servbook",
-    contact_name: "Servbook",
-    client_name: "Servbook",
-    client_phone: "+1 234 567 893",
-    client_email: "servbook@example.com",
-    client_address: null,
-    service_id: "srv-web-app",
-    service_name: "Web App",
-    stage_id: "Accepted",
-    stage_name: "Accepted",
-    stage_group: "won",
-    stage_color: "#16A34A",
-    stage_icon: "Trophy",
-    priority: "High",
-    assigned_agent_id: "agent-4",
-    assigned_agent_name: "Agent Four",
-    assigned_agent_avatar:
-      "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&auto=format&fit=crop&q=80",
-    assigned_artist_id: "artist-4",
-    assigned_artist_name: "Artist Four",
-    assigned_artist_avatar:
-      "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=100&auto=format&fit=crop&q=80",
-    created_by: "a0000000-0000-4000-8000-000000000001",
-    creator_name: "Mehan Ahmed",
-    creator_avatar:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-    budget: 215000,
-    paid_amount: 215000,
-    due_amount: 0,
-    progress: 100,
-    order_date: "2023-10-01",
-    deadline: "2023-10-24",
-    assignees: [],
-    assigned_user_ids: [],
-    notes: "Kofejob is a freelancers marketplace where you can post quotations & get instant help.",
-    created_at: "2023-10-01T00:00:00.000Z",
-    updated_at: "2023-10-01T00:00:00.000Z",
-  },
-];
-
 export default function QuotationsPage() {
   const router = useRouter();
   const { user, profile, isAdmin } = useAuth();
+  const seesAllQuotations = useSeesAllData("quotations");
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedStage, setSelectedStage] = useState<string>("all");
 
   const [quotationModal, setQuotationModal] = useState<{
     open: boolean;
@@ -319,17 +132,13 @@ export default function QuotationsPage() {
   });
 
   const { data: quotationsData, isLoading: isQuotationsLoading } = useQuery(
-    quotationsQueryOptions(user?.id, isAdmin),
+    quotationsQueryOptions(user?.id, seesAllQuotations),
   );
 
   const { data: usersData } = useQuery(crmUsersQueryOptions());
   const { data: servicesData } = useQuery(servicesQueryOptions());
 
   const quotations = useMemo(() => quotationsData?.quotations || [], [quotationsData]);
-  const activeQuotations = useMemo(
-    () => (quotations.length > 0 ? quotations : DEMO_QUOTATIONS),
-    [quotations],
-  );
   const stages = useMemo(
     () => quotationsData?.stages || QUOTATION_WORKFLOW_STAGES,
     [quotationsData],
@@ -348,8 +157,83 @@ export default function QuotationsPage() {
   const updateStatusMutation = useUpdateQuotationStatusMutation();
   const deleteQuotationMutation = useDeleteQuotationMutation();
 
+  const quotationStats = useMemo<QuotationStats>(() => {
+    let draft = 0;
+    let sent = 0;
+    let underReview = 0;
+    let negotiation = 0;
+    let revised = 0;
+    let accepted = 0;
+    let rejected = 0;
+
+    for (const q of quotations) {
+      const s = (q.stage_name || q.stage_id || "").toLowerCase().trim();
+      if (s === "draft") {
+        draft++;
+      } else if (s === "sent") {
+        sent++;
+      } else if (s.includes("review")) {
+        underReview++;
+      } else if (s.includes("negotiat")) {
+        negotiation++;
+      } else if (s.includes("revis")) {
+        revised++;
+      } else if (s.includes("accept") || s.includes("approv")) {
+        accepted++;
+      } else if (s.includes("reject") || s.includes("declin") || s.includes("expir")) {
+        rejected++;
+      }
+    }
+
+    const total = quotations.length;
+    const rate = total > 0 ? `${((accepted / total) * 100).toFixed(1)}%` : "0.0%";
+
+    return {
+      total,
+      draft,
+      sent,
+      underReview,
+      negotiation,
+      revised,
+      accepted,
+      rejected,
+      acceptanceRate: rate,
+    };
+  }, [quotations]);
+
+  const handleSelectStage = (stage: string) => {
+    setSelectedStage(stage);
+    setCurrentPage(1);
+  };
+
   const filteredQuotations = useMemo(() => {
-    return activeQuotations.filter((p) => {
+    return quotations.filter((p) => {
+      if (selectedStage && selectedStage.toLowerCase() !== "all") {
+        const target = selectedStage.toLowerCase().trim();
+        const stage = (p.stage_name || p.stage_id || "").toLowerCase().trim();
+        let matchesStage = false;
+        if (stage === target) {
+          matchesStage = true;
+        } else if (target === "under review" && stage.includes("review")) {
+          matchesStage = true;
+        } else if (target === "negotiation" && stage.includes("negotiat")) {
+          matchesStage = true;
+        } else if (target === "revised" && stage.includes("revis")) {
+          matchesStage = true;
+        } else if (
+          target === "accepted" &&
+          (stage.includes("accept") || stage.includes("approv"))
+        ) {
+          matchesStage = true;
+        } else if (
+          target === "rejected" &&
+          (stage.includes("reject") || stage.includes("declin") || stage.includes("expir"))
+        ) {
+          matchesStage = true;
+        }
+        if (!matchesStage) return false;
+      }
+
       if (!search.trim()) return true;
 
       const q = search.toLowerCase().trim();
@@ -365,7 +249,7 @@ export default function QuotationsPage() {
         (p.assigned_agent_name && p.assigned_agent_name.toLowerCase().includes(q))
       );
     });
-  }, [activeQuotations, search]);
+  }, [quotations, selectedStage, search]);
 
   const handleExportCSV = () => {
     if (filteredQuotations.length === 0) {
@@ -475,7 +359,14 @@ export default function QuotationsPage() {
         </div>
       </div>
 
-      {/* 2. All Quotations Table Card (ERPAPP) */}
+      {/* 2. Quotation Status Summary Cards */}
+      <QuotationSummaryCards
+        stats={quotationStats}
+        selectedStage={selectedStage}
+        onSelectStage={handleSelectStage}
+      />
+
+      {/* 3. All Quotations Table Card (ERPAPP) */}
       <Card className="shadow-xl border bg-card rounded-lg overflow-hidden gap-0 py-0">
         <CardHeader className="border-b p-5">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">

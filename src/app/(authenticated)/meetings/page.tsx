@@ -28,6 +28,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useSeesAllData } from "@/lib/use-data-scope";
 
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
@@ -213,7 +214,8 @@ export default function MeetingsPage() {
     end_date: dateRange?.to ? format(dateRange.to, "yyyy-MM-dd") : undefined,
   };
 
-  const meetingsQuery = useQuery(meetingsQueryOptions(filters, user?.id, isAdmin));
+  const seesAllMeetings = useSeesAllData("meetings");
+  const meetingsQuery = useQuery(meetingsQueryOptions(filters, user?.id, seesAllMeetings));
   const meetings = meetingsQuery.data ?? [];
 
   const totalCount = meetings.length;

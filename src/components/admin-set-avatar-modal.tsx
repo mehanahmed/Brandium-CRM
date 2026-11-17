@@ -14,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { updateUserAvatar, type CrmUser } from "@/lib/admin-users";
+import { uploadImageFile } from "@/lib/upload";
 
 interface AdminSetAvatarModalProps {
   open: boolean;
@@ -25,6 +26,7 @@ export function AdminSetAvatarModal({ open, onOpenChange, user }: AdminSetAvatar
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [avatarUrl, setAvatarUrl] = useState<string>("");
+  const [isUploading, setIsUploading] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -50,21 +52,23 @@ export function AdminSetAvatarModal({ open, onOpenChange, user }: AdminSetAvatar
 
   if (!user) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // The image is saved as a file under /uploads; only its short link goes into MySQL
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        toast.error("Image file size should be less than 2MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") {
-          setAvatarUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Image file size should be less than 2MB.");
+      return;
     }
+    setIsUploading(true);
+    const res = await uploadImageFile(file);
+    setIsUploading(false);
+    if (!res.success || !res.url) {
+      toast.error(res.error || "Image upload failed.");
+      return;
+    }
+    setAvatarUrl(res.url);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -116,9 +120,10 @@ export function AdminSetAvatarModal({ open, onOpenChange, user }: AdminSetAvatar
                 variant="outline"
                 className="gap-2 px-4 py-2.5 h-auto text-sm font-medium border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 text-foreground rounded-xl shadow-2xs"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
               >
                 <UploadCloud className="size-4 text-[#67B239]" />
-                Upload Image
+                {isUploading ? "Uploading..." : "Upload Image"}
               </Button>
             </div>
 
@@ -139,7 +144,7 @@ export function AdminSetAvatarModal({ open, onOpenChange, user }: AdminSetAvatar
             <Button
               type="submit"
               className="px-5 py-2 h-auto text-sm font-medium bg-[#67B239] hover:bg-[#5aa030] text-white rounded-xl shadow-2xs transition-colors"
-              disabled={updateAvatarMutation.isPending}
+              disabled={updateAvatarMutation.isPending || isUploading}
             >
               {updateAvatarMutation.isPending ? "Saving..." : "Save Changes"}
             </Button>

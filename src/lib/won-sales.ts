@@ -38,6 +38,7 @@ export type AgentOption = {
   id: string;
   name: string;
   role?: string;
+  avatar_url?: string | null;
 };
 
 export type ArtistOption = {
@@ -165,7 +166,8 @@ function applyFilters(items: WonSaleItem[], filters: WonSaleFilters): WonSaleIte
 export async function fetchAgentOptions(): Promise<AgentOption[]> {
   try {
     const res = await runMySQLQuery<Record<string, unknown>[]>(
-      `SELECT u.id, COALESCE(p.full_name, u.name, u.email) AS name, u.role 
+      `SELECT u.id, COALESCE(p.full_name, u.name, u.email) AS name, u.role,
+              COALESCE(p.avatar_url, u.avatar_url) AS avatar_url
        FROM \`users\` u 
        LEFT JOIN \`profiles\` p ON u.id = p.id 
        WHERE (u.is_deleted = 0 OR u.is_deleted IS NULL) 
@@ -180,6 +182,7 @@ export async function fetchAgentOptions(): Promise<AgentOption[]> {
       id: String(u["id"]),
       name: String(u["name"] || "Agent"),
       role: String(u["role"] || "AGENT"),
+      avatar_url: u["avatar_url"] ? String(u["avatar_url"]) : null,
     }));
   } catch (err) {
     console.warn("fetchAgentOptions MySQL error:", err);

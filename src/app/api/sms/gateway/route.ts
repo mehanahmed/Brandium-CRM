@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { loadSmsSettings, saveSmsSettings, toPublicSettings } from "@/lib/sms-gateway-server";
+import { forbidden, readSession, unauthorized } from "@/lib/session-server";
 
 const updateSchema = z.object({
   api_url: z.string().trim().url().max(500),
@@ -12,7 +13,8 @@ const updateSchema = z.object({
   updated_by: z.string().max(36).nullable().optional(),
 });
 
-export async function GET() {
+export async function GET(req: Request) {
+  if (!readSession(req)) return unauthorized();
   try {
     return NextResponse.json({ success: true, data: toPublicSettings(await loadSmsSettings()) });
   } catch {
@@ -24,6 +26,10 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
+  const session = readSession(req);
+  if (!session) return unauthorized();
+  if (!session.admin) return forbidden();
+
   const parsed = updateSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -32,8 +38,8 @@ export async function PUT(req: Request) {
     );
   }
   try {
-    const { updated_by, ...input } = parsed.data;
-    await saveSmsSettings(input, updated_by ?? null);
+    const { updated_by: _ignored, ...input } = parsed.data;
+    await saveSmsSettings(input, session.id);
     return NextResponse.json({ success: true, data: toPublicSettings(await loadSmsSettings()) });
   } catch {
     return NextResponse.json(

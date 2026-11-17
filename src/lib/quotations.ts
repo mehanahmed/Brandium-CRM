@@ -1,8 +1,10 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runMySQLQuery } from "./mysql-api";
+import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
 import { generateUUID } from "./mysql-client";
+import { QUOTATION_INSERT_SQL } from "./trusted-sql";
 import { resolveStageIcon, type Stage } from "./stages";
+import { parseTerms } from "@/components/sales/terms-editor";
 
 export type QuotationAssignee = {
   id: string;
@@ -62,6 +64,8 @@ export type CrmQuotationItem = {
   order_date: string | null;
   deadline: string | null;
   notes: string | null;
+  /** This quotation's own Terms & Conditions; null means the default list. */
+  terms?: string[] | null;
   prospect_notes?: string | null;
   status_history?: string | null;
   is_protected?: boolean | null;
@@ -91,6 +95,8 @@ export type SaveQuotationPayload = {
   order_date?: string | null;
   deadline?: string | null;
   notes?: string | null;
+  /** This quotation's terms, or null to use the default list. Left out on edit = unchanged. */
+  terms?: string[] | null | undefined;
   client_address?: string | null;
   created_at?: string | null;
 };
@@ -213,6 +219,7 @@ export const quotationsQueryOptions = (userId?: string, isAdmin: boolean = false
           prj.order_date,
           prj.deadline,
           prj.notes,
+          prj.terms,
           prj.client_address,
           prj.status_history,
           p.notes AS prospect_notes,
@@ -383,6 +390,7 @@ export const quotationsQueryOptions = (userId?: string, isAdmin: boolean = false
             order_date: (r["order_date"] as string) || null,
             deadline: (r["deadline"] as string) || null,
             notes: (r["notes"] as string) || null,
+            terms: parseTerms(r["terms"]),
             prospect_notes: (r["prospect_notes"] as string) || null,
             status_history: (r["status_history"] as string) || null,
             created_at: String(r["created_at"] || new Date().toISOString()),
@@ -415,7 +423,7 @@ export function useSaveQuotationMutation() {
       const isUpdate = Boolean(payload.id);
 
       if (isUpdate) {
-        await runMySQLQuery(
+        await runMySQLWrite(
           `UPDATE quotations SET 
             title = ?, 
             prospect_id = ?,
@@ -436,7 +444,8 @@ export function useSaveQuotationMutation() {
             notes = ?, 
             assigned_agent_id = ?, 
             assigned_artist_id = ?,
-            created_by = ?
+            created_by = ?,
+            terms = IF(?, ?, terms)
           WHERE id = ?;`,
           [
             payload.title,
@@ -463,21 +472,18 @@ export function useSaveQuotationMutation() {
             payload.assigned_agent_id || null,
             payload.assigned_artist_id || null,
             payload.created_by || null,
+            payload.terms !== undefined ? 1 : 0,
+            payload.terms?.length ? JSON.stringify(payload.terms) : null,
             id,
           ],
         );
       } else {
-        const randomCode =
-          payload.quotation_code || `QT-${Math.floor(1000 + Math.random() * 9000)}`;
-        await runMySQLQuery(
-          `INSERT INTO quotations (
-            id, quotation_code, title, prospect_id, client_name, client_phone, client_email, client_address,
-            service_id, status, priority, budget, paid_amount, advance_payments, progress, order_date, deadline,
-            notes, assigned_agent_id, assigned_artist_id, created_by, is_active, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, COALESCE(?, NOW()));`,
-          [
+        // The next code (QT-1001, QT-1002, ...) is computed by MySQL inside the INSERT. Two saves
+        // at the same instant can pick the same number; the unique key rejects one, so retry once.
+        const insert = () =>
+          runMySQLWrite(QUOTATION_INSERT_SQL, [
             id,
-            randomCode,
+            payload.quotation_code || null,
             payload.title,
             payload.prospect_id || null,
             payload.client_name,
@@ -498,8 +504,19 @@ export function useSaveQuotationMutation() {
             payload.assigned_artist_id || null,
             payload.created_by || null,
             payload.created_at || null,
-          ],
-        );
+          ]);
+        try {
+          await insert();
+        } catch (err) {
+          if (!/duplicate entry/i.test((err as Error).message)) throw err;
+          await insert();
+        }
+        if (payload.terms?.length) {
+          await runMySQLWrite("UPDATE quotations SET terms = ? WHERE id = ?;", [
+            JSON.stringify(payload.terms),
+            id,
+          ]);
+        }
       }
 
       return { success: true, id };

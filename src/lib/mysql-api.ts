@@ -27,6 +27,12 @@ export async function runMySQLQuery<T = unknown>(
         const result = (await response.json()) as { success: boolean; data?: T; error?: string };
         return result;
       }
+      if (response.status === 401 && window.location.pathname !== "/login") {
+        // Server session is missing or expired: drop the stored copy and sign in again
+        localStorage.removeItem("brandium_user_session");
+        localStorage.removeItem("brandium_dev_session");
+        window.location.assign("/login");
+      }
       const errJson = await response.json().catch(() => ({}));
       return { success: false, error: (errJson as { error?: string }).error || "Query failed." };
     }
@@ -45,6 +51,16 @@ export async function runMySQLQuery<T = unknown>(
     const errObj = err as { message?: string };
     return { success: false, error: errObj?.message || "Database connection error" };
   }
+}
+
+/**
+ * Runs an INSERT / UPDATE / DELETE and throws when the database rejects it, so callers can
+ * never show "saved" for a write that did not happen. Returns the number of rows matched.
+ */
+export async function runMySQLWrite(sql: string, params: unknown[] = []): Promise<number> {
+  const res = await runMySQLQuery<{ affectedRows?: number }[]>(sql, params);
+  if (!res.success) throw new Error(res.error || "Database write failed.");
+  return Number(res.data?.[0]?.affectedRows ?? 0);
 }
 
 /**

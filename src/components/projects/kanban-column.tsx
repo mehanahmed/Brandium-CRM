@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
+import { useDroppable } from "@dnd-kit/core";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -17,14 +18,14 @@ interface KanbanColumnProps {
   color: string;
   orders: CrmOrder[];
   isLoading: boolean;
-  draggingOrderId: string | null;
-  onDropOrder: (orderId: string, statusId: string) => void;
+  draggingOrderId?: string | null;
+  onDropOrder?: (orderId: string, statusId: string) => void;
   onAssign: (order: CrmOrder) => void;
-  onCardDragStart: (order: CrmOrder) => void;
-  onCardDragEnd: () => void;
+  onCardDragStart?: (order: CrmOrder) => void;
+  onCardDragEnd?: () => void;
 }
 
-/** Clone of ERPAPP `KanbanColumn.tsx`, using native HTML5 drag-and-drop. */
+/** Clone of ERPAPP `KanbanColumn.tsx`, using @dnd-kit droppable column. */
 export function KanbanColumn({
   id,
   title,
@@ -32,14 +33,10 @@ export function KanbanColumn({
   color,
   orders,
   isLoading,
-  draggingOrderId,
-  onDropOrder,
   onAssign,
-  onCardDragStart,
-  onCardDragEnd,
 }: KanbanColumnProps) {
+  const { setNodeRef, isOver } = useDroppable({ id });
   const [visibleCount, setVisibleCount] = useState(PROJECTS_PER_PAGE);
-  const [isOver, setIsOver] = useState(false);
   const visibleOrders = orders.slice(0, visibleCount);
   const hasMore = visibleCount < orders.length;
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -60,21 +57,7 @@ export function KanbanColumn({
 
   return (
     <div
-      onDragOver={(e) => {
-        if (!draggingOrderId) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (!isOver) setIsOver(true);
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setIsOver(false);
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setIsOver(false);
-        const orderId = e.dataTransfer.getData("text/plain") || draggingOrderId;
-        if (orderId) onDropOrder(orderId, id);
-      }}
+      ref={setNodeRef}
       className={cn(
         "w-72 shrink-0 flex flex-col bg-muted/30 rounded-lg overflow-hidden transition-all duration-200 ease-in-out h-full border",
         isOver
@@ -110,14 +93,7 @@ export function KanbanColumn({
             </div>
           ) : (
             visibleOrders.map((order) => (
-              <ProjectCard
-                key={order.id}
-                order={order}
-                isDragging={draggingOrderId === order.id}
-                onAssign={onAssign}
-                onDragStart={onCardDragStart}
-                onDragEnd={onCardDragEnd}
-              />
+              <ProjectCard key={order.id} order={order} onAssign={onAssign} />
             ))
           )}
           {hasMore && (

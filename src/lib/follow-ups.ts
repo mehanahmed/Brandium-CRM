@@ -2,8 +2,8 @@ import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query
 import { format } from "date-fns";
 
 import { fetchCrmUsers } from "@/lib/admin-users";
-import { runMySQLQuery } from "@/lib/mysql-api";
-import { addStageNote } from "@/lib/stages";
+import { runMySQLQuery, runMySQLWrite } from "@/lib/mysql-api";
+import { addStageNote, FALLBACK_STAGES, resolveStageColor } from "@/lib/stages";
 import { generateUUID, getMySQLTimestamp } from "@/lib/mysql-client";
 
 export const agentsQuery = () =>
@@ -124,10 +124,11 @@ export function useCreateFollowUp() {
 // -----------------------------------------------------------------------------
 // Follow-up board (ERPAPP /follow-up clone). A follow-up is a
 // `prospect_stage_history` row with `follow_up_due_at` set; the board shows the
-// latest one per prospect, grouped by `follow_up_status` into `followup_stages`.
+// latest one per prospect, grouped into columns by the prospect's pipeline stage
+// (`prospects.stage_id` → `stages`), so the board and the prospect stage never differ.
 // -----------------------------------------------------------------------------
 
-export type FollowUpStage = { id: string; name: string; color: string };
+export type FollowUpStage = { id: string; name: string; color: string; group: string };
 
 export type FollowUpBoardItem = {
   id: string;
@@ -146,38 +147,46 @@ export type FollowUpBoardItem = {
   business_name: string;
   phone: string;
   address: string;
+  logo_url: string | null;
 };
 
-const DEFAULT_FOLLOW_UP_STAGES: FollowUpStage[] = [
-  { id: "stage-pending", name: "Pending", color: "#3B82F6" },
-  { id: "stage-in-progress", name: "In Progress", color: "#8B5CF6" },
-  { id: "stage-completed", name: "Completed", color: "#10B981" },
-  { id: "stage-canceled", name: "Canceled", color: "#EF4444" },
-];
-
-const normalizeStatus = (value: string) =>
+const normalizeStage = (value: string) =>
   value
     .toLowerCase()
     .replace(/[^a-z]/g, "")
     .replace("cancelled", "canceled");
 
-/** Column for a follow-up status; legacy values ("pending", "cancelled") match by name. */
-export const followUpStageFor = (status: string, stages: FollowUpStage[]) =>
-  stages.find((s) => normalizeStatus(s.name) === normalizeStatus(status || "")) || stages[0];
+/** Column for a prospect stage id; legacy ids ("follow_up") and stage names also match. */
+export const followUpStageFor = (stageId: string, stages: FollowUpStage[]) => {
+  const key = normalizeStage(stageId || "");
+  return (
+    stages.find((s) => normalizeStage(s.id) === key || normalizeStage(s.name) === key) || stages[0]
+  );
+};
 
+/** Board columns = the active prospect pipeline stages (`stages`). */
 export const followUpStagesQueryOptions = () =>
   queryOptions({
     queryKey: ["follow-up-stages"],
     queryFn: async (): Promise<FollowUpStage[]> => {
       const res = await runMySQLQuery<Record<string, unknown>[]>(
-        "SELECT `id`, `name`, `color` FROM `followup_stages` ORDER BY `position` ASC, `name` ASC;",
+        "SELECT `id`, `name`, `color`, `stage_group` FROM `stages` WHERE `is_active` = 1 OR `is_active` IS NULL ORDER BY `sort_order` ASC, `name` ASC;",
       );
       const rows = (res.data || []) as Record<string, unknown>[];
-      if (!res.success || rows.length === 0) return DEFAULT_FOLLOW_UP_STAGES;
-      return rows.map((r) => ({
-        id: String(r["id"]),
-        name: String(r["name"]),
-        color: String(r["color"] || "#64748B"),
+      const source =
+        res.success && rows.length > 0
+          ? rows.map((r) => ({
+              id: String(r["id"]),
+              name: String(r["name"]),
+              color: r["color"] ? String(r["color"]) : null,
+              group: String(r["stage_group"] || "new"),
+            }))
+          : FALLBACK_STAGES.map((st) => ({ ...st, group: st.stage_group }));
+      return source.map((st) => ({
+        id: st.id,
+        name: st.name,
+        color: resolveStageColor(st.name, st.color),
+        group: st.group,
       }));
     },
   });
@@ -188,8 +197,8 @@ export const followUpBoardQueryOptions = (userId: string | undefined, isAdmin: b
     queryFn: async (): Promise<FollowUpBoardItem[]> => {
       const res = await runMySQLQuery<Record<string, unknown>[]>(
         `SELECT h.id, h.prospect_id, h.follow_up_due_at, h.follow_up_status, h.follow_up_assigned_to,
-                h.changed_by, h.changed_at, h.note,
-                p.contact_name, p.business_name, p.phone, p.address,
+                h.changed_by, h.changed_at, h.note, p.stage_id,
+                p.contact_name, p.business_name, p.phone, p.address, p.logo_url,
                 COALESCE(prof.full_name, u.name) AS agent_name,
                 COALESCE(prof.avatar_url, u.avatar_url) AS agent_avatar,
                 COALESCE(cprof.full_name, c.name) AS creator_name,
@@ -219,7 +228,8 @@ export const followUpBoardQueryOptions = (userId: string | undefined, isAdmin: b
           id: String(r["id"]),
           prospect_id: prospectId,
           due_at: String(r["follow_up_due_at"]),
-          status: String(r["follow_up_status"] || "pending"),
+          // The prospect's current pipeline stage decides the column
+          status: String(r["stage_id"] || "prospect"),
           assigned_to: assignedTo,
           agent_name: String(r["agent_name"] || "Unassigned"),
           agent_avatar: r["agent_avatar"] ? String(r["agent_avatar"]) : null,
@@ -232,47 +242,75 @@ export const followUpBoardQueryOptions = (userId: string | undefined, isAdmin: b
           business_name: String(r["business_name"] || ""),
           phone: String(r["phone"] || ""),
           address: String(r["address"] || ""),
+          logo_url: r["logo_url"] ? String(r["logo_url"]) : null,
         });
       }
       return items;
     },
   });
 
-/** ERPAPP `updateFollowUpStatusAction`: optional status change plus a timeline note. */
+/**
+ * ERPAPP `updateFollowUpStatusAction`: optional stage change plus a timeline note.
+ * `status` is the target prospect stage id; a change moves the prospect itself.
+ */
 export function useUpdateFollowUp() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: {
       item: FollowUpBoardItem;
       status: string;
+      statusName: string;
       notes: string;
       /** Next follow-up date (`datetime-local` value); unchanged when it matches the current one. */
       nextDueAt?: string | undefined;
       userId: string | undefined;
       userName: string;
     }) => {
-      const { item, status, notes, nextDueAt, userId, userName } = input;
-      const statusChanged = normalizeStatus(item.status) !== normalizeStatus(status);
+      const { item, status, statusName, notes, nextDueAt, userId, userName } = input;
+      const statusChanged = normalizeStage(item.status) !== normalizeStage(status);
       const nextDue = nextDueAt ? new Date(nextDueAt) : null;
       if (nextDue && Number.isNaN(nextDue.getTime())) throw new Error("Invalid follow-up date.");
       const newDueAt = nextDue ? getMySQLTimestamp(nextDue) : null;
       const dueChanged = !!newDueAt && newDueAt.slice(0, 16) !== item.due_at.slice(0, 16);
-      if (statusChanged || dueChanged) {
-        const res = await runMySQLQuery(
-          "UPDATE `prospect_stage_history` SET `follow_up_status` = ?, `follow_up_due_at` = COALESCE(?, `follow_up_due_at`) WHERE `id` = ?;",
-          [status, dueChanged ? newDueAt : null, item.id],
+      let historyId = item.id;
+      if (statusChanged) {
+        const now = getMySQLTimestamp();
+        await runMySQLWrite(
+          "UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;",
+          [status, now, item.prospect_id],
         );
-        if (!res.success) throw new Error(res.error || "Failed to update follow-up");
+        // New stage transition row; the follow-up moves onto it so the board shows its note
+        historyId = generateUUID();
+        await runMySQLWrite(
+          `INSERT INTO \`prospect_stage_history\` (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`changed_by\`, \`changed_at\`, \`follow_up_due_at\`, \`follow_up_assigned_to\`, \`follow_up_status\`)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          [
+            historyId,
+            item.prospect_id,
+            item.status,
+            status,
+            userId || null,
+            now,
+            dueChanged ? newDueAt : item.due_at,
+            item.assigned_to,
+            status,
+          ],
+        );
+      } else if (dueChanged) {
+        await runMySQLWrite(
+          "UPDATE `prospect_stage_history` SET `follow_up_due_at` = ? WHERE `id` = ?;",
+          [newDueAt, item.id],
+        );
       }
       const outcome = [
-        statusChanged ? `Status changed to ${status}` : "Activity Updated",
+        statusChanged ? `Stage changed to ${statusName}` : "Activity Updated",
         dueChanged && nextDue ? `next follow-up ${format(nextDue, "dd MMM yyyy, hh:mm a")}` : "",
       ]
         .filter(Boolean)
         .join(", ");
       const saved = await addStageNote({
         prospectId: item.prospect_id,
-        historyId: item.id,
+        historyId,
         note: notes.trim(),
         userId: userId || null,
         userName,
@@ -294,6 +332,8 @@ export function useUpdateFollowUp() {
       void queryClient.invalidateQueries({ queryKey: ["follow-ups"] });
       void queryClient.invalidateQueries({ queryKey: ["activities"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      void queryClient.invalidateQueries({ queryKey: ["prospects"] });
+      void queryClient.invalidateQueries({ queryKey: ["prospects-stats"] });
       void queryClient.invalidateQueries({ queryKey: ["stage-history", input.item.prospect_id] });
     },
   });
@@ -316,87 +356,5 @@ export function useRemoveFollowUp() {
       void queryClient.invalidateQueries({ queryKey: ["follow-ups"] });
       void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
-  });
-}
-
-// Admin management of the board columns (`followup_stages`).
-
-const invalidateFollowUpStages = (queryClient: ReturnType<typeof useQueryClient>) => {
-  void queryClient.invalidateQueries({ queryKey: ["follow-up-stages"] });
-  void queryClient.invalidateQueries({ queryKey: ["follow-ups"] });
-};
-
-const runStageWrite = async (sql: string, params: unknown[]) => {
-  const res = await runMySQLQuery(sql, params);
-  if (!res.success) {
-    throw new Error(
-      /duplicate/i.test(res.error || "")
-        ? "A column with this name already exists."
-        : res.error || "Failed to save column",
-    );
-  }
-};
-
-/** Adds a column, or renames/recolours one; `itemIds` (cards now in it) follow a rename. */
-export function useSaveFollowUpStage() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (input: {
-      id?: string | undefined;
-      name: string;
-      color: string;
-      position: number;
-      itemIds: string[];
-      userId?: string | undefined;
-    }) => {
-      const name = input.name.trim();
-      if (!name) throw new Error("Column name is required.");
-      if (!/^#[0-9a-f]{6}$/i.test(input.color)) throw new Error("Pick a valid colour.");
-      if (!input.id) {
-        await runStageWrite(
-          "INSERT INTO `followup_stages` (`id`, `name`, `color`, `position`, `is_default`, `created_by`) VALUES (?, ?, ?, ?, 0, ?);",
-          [generateUUID(), name, input.color, input.position, input.userId || null],
-        );
-        return;
-      }
-      await runStageWrite("UPDATE `followup_stages` SET `name` = ?, `color` = ? WHERE `id` = ?;", [
-        name,
-        input.color,
-        input.id,
-      ]);
-      if (input.itemIds.length > 0) {
-        await runStageWrite(
-          `UPDATE \`prospect_stage_history\` SET \`follow_up_status\` = ?
-           WHERE \`id\` IN (${input.itemIds.map(() => "?").join(", ")});`,
-          [name, ...input.itemIds],
-        );
-      }
-    },
-    onSuccess: () => invalidateFollowUpStages(queryClient),
-  });
-}
-
-export function useDeleteFollowUpStage() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (id: string) =>
-      runStageWrite("DELETE FROM `followup_stages` WHERE `id` = ?;", [id]),
-    onSuccess: () => invalidateFollowUpStages(queryClient),
-  });
-}
-
-/** Saves the column order: `position` = index in `orderedIds`. */
-export function useReorderFollowUpStages() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async (orderedIds: string[]) => {
-      for (const [position, id] of orderedIds.entries()) {
-        await runStageWrite("UPDATE `followup_stages` SET `position` = ? WHERE `id` = ?;", [
-          position,
-          id,
-        ]);
-      }
-    },
-    onSuccess: () => invalidateFollowUpStages(queryClient),
   });
 }

@@ -1,13 +1,22 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runMySQLQuery } from "./mysql-api";
+import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
 import { generateUUID } from "./mysql-client";
+import { ORDER_INSERT_SQL } from "./trusted-sql";
 import type { AdvancePaymentRecord } from "./projects";
+import { parseTerms, resolveTerms } from "@/components/sales/terms-editor";
 
 /* ERPAPP-style Orders (/orders list + /track/[id]) persisted in MySQL `orders` / `order_comments`. */
 
 /** `assignable` stages ask for the responsible user when an order moves into them. */
-export type OrderStatus = { id: string; name: string; color: string; assignable?: boolean };
+export type OrderStatus = {
+  id: string;
+  name: string;
+  color: string;
+  assignable?: boolean;
+  /** Short role name (`users.role`) of the people who work this stage. */
+  role?: string;
+};
 
 export const ORDER_SUBMITTED_STATUS_ID = "order-submitted";
 
@@ -15,16 +24,63 @@ export const ORDER_SUBMITTED_STATUS_ID = "order-submitted";
 export const ORDER_STATUSES: OrderStatus[] = [
   { id: ORDER_SUBMITTED_STATUS_ID, name: "Order Submitted", color: "#3B82F6" },
   { id: "on-hold", name: "On Hold", color: "#FBBF24" },
-  { id: "script-writer", name: "Script Writer", color: "#8B5CF6", assignable: true },
-  { id: "content-planner", name: "Content Planner", color: "#EC4899", assignable: true },
-  { id: "videographer", name: "Videographer", color: "#F59E0B", assignable: true },
+  { id: "script-writer", name: "Script Writer", color: "#8B5CF6", assignable: true, role: "SW" },
+  {
+    id: "content-planner",
+    name: "Content Planner",
+    color: "#EC4899",
+    assignable: true,
+    role: "CP",
+  },
+  { id: "videographer", name: "Videographer", color: "#F59E0B", assignable: true, role: "VG" },
   { id: "video-graphy-complete", name: "Video Graphy Complete", color: "#10B981" },
-  { id: "video-editor", name: "Video Editor", color: "#6366F1", assignable: true },
-  { id: "marketer", name: "Marketer", color: "#06B6D4", assignable: true },
-  { id: "developer", name: "Developer", color: "#0284C7", assignable: true },
+  { id: "video-editor", name: "Video Editor", color: "#6366F1", assignable: true, role: "VE" },
+  { id: "marketer", name: "Marketer", color: "#06B6D4", assignable: true, role: "MK" },
+  { id: "developer", name: "Developer", color: "#0284C7", assignable: true, role: "DEV" },
   { id: "delivered", name: "Delivered", color: "#16A34A" },
   { id: "canceled", name: "Canceled", color: "#EF4444" },
 ];
+
+/** Stages that run on the clock; Delivered has no SLA. */
+export const SLA_STAGES = ORDER_STATUSES.filter((s) => s.id !== "delivered");
+/** Default per-stage SLA when the order has no delivery date. */
+export const DEFAULT_STAGE_SLA_HOURS = 48;
+
+/** When the order entered its current stage (latest matching history entry). */
+export const getStageStartedAt = (order: CrmOrder): string => {
+  const current = resolveOrderStatus(order.status).id;
+  const entry = [...order.status_history]
+    .reverse()
+    .find((h) => resolveOrderStatus(h.status).id === current);
+  return entry?.timestamp || order.updated_at || order.created_at;
+};
+
+/**
+ * ERPAPP stage SLA: with a delivery date the time is split evenly across the working stages;
+ * otherwise each stage gets DEFAULT_STAGE_SLA_HOURS. Null for Delivered.
+ */
+export const getStageDeadline = (
+  order: CrmOrder,
+): { start: Date; target: Date; slaHours: number } | null => {
+  if (resolveOrderStatus(order.status).id === "delivered") return null;
+  const start = new Date(getStageStartedAt(order));
+  if (order.delivery_date) {
+    const projectStart = new Date(order.created_at).getTime();
+    const projectEnd = new Date(order.delivery_date).getTime();
+    const totalDays = Math.max(1, (projectEnd - projectStart) / 86400000);
+    const allocatedDays = totalDays / SLA_STAGES.length;
+    return {
+      start,
+      target: new Date(start.getTime() + Math.round(allocatedDays * 86400000)),
+      slaHours: Math.max(1, Math.round(allocatedDays * 24)),
+    };
+  }
+  return {
+    start,
+    target: new Date(start.getTime() + DEFAULT_STAGE_SLA_HOURS * 3600000),
+    slaHours: DEFAULT_STAGE_SLA_HOURS,
+  };
+};
 
 /** Earlier ERPAPP status ids that may still be stored on older orders (display only). */
 const LEGACY_ORDER_STATUSES: OrderStatus[] = [
@@ -97,6 +153,8 @@ export interface CrmOrder {
   status_history: OrderStatusHistoryEntry[];
   is_starred: number;
   notes: string | null;
+  /** This order's own Terms & Conditions; null means the default `BRANDIUM_TERMS`. */
+  terms: string[] | null;
   order_date: string | null;
   delivery_date: string | null;
   created_at: string;
@@ -197,6 +255,7 @@ function mapOrderRow(r: Record<string, unknown>): CrmOrder {
     status_history: parseJsonArray<OrderStatusHistoryEntry>(r["status_history"]),
     is_starred: Number(r["is_starred"] || 0),
     notes: (r["notes"] as string) || null,
+    terms: parseTerms(r["terms"]),
     order_date: (r["order_date"] as string) || null,
     delivery_date: (r["delivery_date"] as string) || null,
     created_at: String(r["order_date"] || r["created_at"] || new Date().toISOString()),
@@ -256,6 +315,8 @@ export const orderCommentsQueryOptions = (orderId?: string) =>
 
 export type SaveOrderPayload = {
   id?: string | undefined;
+  /** `updated_at` of the order as loaded; an update is refused if the row changed since. */
+  expected_updated_at?: string | undefined;
   job_id: string | null;
   company_name: string;
   phone: string;
@@ -268,12 +329,16 @@ export type SaveOrderPayload = {
   advance_payments: AdvancePaymentRecord[];
   is_starred: number;
   notes: string | null;
+  /** This order's terms, or null to use the default list. Left out on edit = unchanged. */
+  terms?: string[] | null | undefined;
   /** `yyyy-MM-dd HH:mm:ss` */
   order_date: string;
   /** `yyyy-MM-dd HH:mm:ss` or null */
   delivery_date: string | null;
   changed_by_name: string;
 };
+
+const STALE_ORDER_MESSAGE = "This order was changed by someone else. Reload it and try again.";
 
 const invalidateOrders = (queryClient: ReturnType<typeof useQueryClient>) => {
   queryClient.invalidateQueries({ queryKey: ["crm-orders"] });
@@ -307,15 +372,26 @@ export function useSaveOrderMutation() {
       ];
 
       if (payload.id) {
-        await runMySQLQuery(
+        // payments_json and items_json are whole-value overwrites, so a stale form must not win.
+        // shortcut: updated_at has 1-second precision; two saves in the same second can still
+        // overwrite each other. Add a version counter column if that ever matters.
+        const changed = await runMySQLWrite(
           `UPDATE orders SET
             job_id = ?, client_name = ?, company_name = ?, phone = ?, address = ?, service_name = ?,
             items_json = ?, discount_amount = ?, shipping_charge = ?, total_amount = ?, paid_amount = ?,
             due_amount = ?, payments_json = ?, is_starred = ?, notes = ?, order_date = ?, delivery_date = ?,
-            updated_at = NOW()
-          WHERE id = ?;`,
-          [...common, payload.id],
+            terms = IF(?, ?, terms), updated_at = NOW()
+          WHERE id = ? AND (? IS NULL OR updated_at IS NULL OR updated_at = ?);`,
+          [
+            ...common,
+            payload.terms !== undefined ? 1 : 0,
+            payload.terms?.length ? JSON.stringify(payload.terms) : null,
+            payload.id,
+            payload.expected_updated_at ?? null,
+            payload.expected_updated_at ?? null,
+          ],
         );
+        if (changed === 0) throw new Error(STALE_ORDER_MESSAGE);
         return { id: payload.id, order_number: null as string | null };
       }
 
@@ -331,28 +407,21 @@ export function useSaveOrderMutation() {
         },
       ];
       // Blank Job ID: next numeric Job ID is computed by MySQL inside the same INSERT.
-      const insertRes = await runMySQLQuery(
-        `INSERT INTO orders (
-          job_id, client_name, company_name, phone, address, service_name,
-          items_json, discount_amount, shipping_charge, total_amount, paid_amount,
-          due_amount, payments_json, is_starred, notes, order_date, delivery_date,
-          id, order_number, status, crm_user_id, status_history, is_deleted
-        ) SELECT
-          COALESCE(?, (
-            SELECT CAST(COALESCE(MAX(CAST(job_id AS UNSIGNED)), 1000) + 1 AS CHAR)
-            FROM orders WHERE job_id REGEXP '^[0-9]+$'
-          )),
-          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0;`,
-        [
-          ...common,
-          id,
-          orderNumber,
-          ORDER_SUBMITTED_STATUS_ID,
-          payload.crm_user_id || null,
-          JSON.stringify(history),
-        ],
-      );
+      const insertRes = await runMySQLQuery(ORDER_INSERT_SQL, [
+        ...common,
+        id,
+        orderNumber,
+        ORDER_SUBMITTED_STATUS_ID,
+        payload.crm_user_id || null,
+        JSON.stringify(history),
+      ]);
       if (!insertRes.success) throw new Error(insertRes.error || "Failed to create order");
+      if (payload.terms?.length) {
+        await runMySQLWrite("UPDATE orders SET terms = ? WHERE id = ?;", [
+          JSON.stringify(payload.terms),
+          id,
+        ]);
+      }
       return { id, order_number: orderNumber };
     },
     onSuccess: (_, variables) => {
@@ -385,17 +454,13 @@ async function writeStatusChange(
       notes,
     },
   ];
-  if (designerId !== undefined) {
-    await runMySQLQuery(
-      "UPDATE orders SET status = ?, designer_id = ?, status_history = ?, updated_at = NOW() WHERE id = ?;",
-      [statusId, designerId, JSON.stringify(history), order.id],
-    );
-  } else {
-    await runMySQLQuery(
-      "UPDATE orders SET status = ?, status_history = ?, updated_at = NOW() WHERE id = ?;",
-      [statusId, JSON.stringify(history), order.id],
-    );
-  }
+  // status_history is rebuilt from the loaded copy, so refuse if the row changed since
+  const changed = await runMySQLWrite(
+    `UPDATE orders SET status = ?, designer_id = COALESCE(?, designer_id), status_history = ?, updated_at = NOW()
+     WHERE id = ? AND (updated_at IS NULL OR updated_at = ?);`,
+    [statusId, designerId ?? null, JSON.stringify(history), order.id, order.updated_at],
+  );
+  if (changed === 0) throw new Error(STALE_ORDER_MESSAGE);
 }
 
 /** Stages that need a written reason before an order can move into them. */
@@ -514,3 +579,7 @@ export function useDeleteOrderCommentMutation() {
     onError: (err: Error) => toast.error(err.message || "Failed to delete comment"),
   });
 }
+
+/** The Terms & Conditions to print for an order: its own list, else the default one. */
+export const resolveOrderTerms = (order: Pick<CrmOrder, "terms">): string[] =>
+  resolveTerms(order.terms);

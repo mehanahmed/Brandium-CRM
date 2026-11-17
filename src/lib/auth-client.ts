@@ -9,6 +9,8 @@ export type AuthUser = {
   user_metadata: {
     full_name?: string;
     role?: string;
+    roleName?: string;
+    permissions?: string[];
     [key: string]: unknown;
   };
 };
@@ -53,6 +55,8 @@ export async function signInWithPassword(credentials: {
       user_metadata: {
         full_name: body.user.name,
         role: body.user.role,
+        roleName: body.user.roleName || body.user.role,
+        permissions: Array.isArray(body.user.permissions) ? body.user.permissions : [],
       },
     };
 

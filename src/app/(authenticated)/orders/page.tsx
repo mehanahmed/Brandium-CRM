@@ -84,6 +84,7 @@ import { EditOrderDialog } from "@/components/orders/edit-order-dialog";
 import { DateRangePicker3 } from "@/components/dashboard/date-range-picker3";
 import { AssignStageDialog, getInitials } from "@/components/orders/assign-stage-dialog";
 import { StatusReasonDialog } from "@/components/orders/status-reason-dialog";
+import { useSeesAllData } from "@/lib/use-data-scope";
 
 const ITEMS_PER_PAGE = 25;
 
@@ -128,7 +129,8 @@ export default function OrdersPage() {
   );
   const [orderToDelete, setOrderToDelete] = useState<CrmOrder | null>(null);
 
-  const { data: ordersData, isLoading } = useQuery(ordersQueryOptions(user?.id, isAdmin));
+  const seesAllOrders = useSeesAllData("orders");
+  const { data: ordersData, isLoading } = useQuery(ordersQueryOptions(user?.id, seesAllOrders));
   const { data: usersData } = useQuery(crmUsersQueryOptions());
   const { data: servicesData } = useQuery(servicesQueryOptions());
 

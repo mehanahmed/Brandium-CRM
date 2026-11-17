@@ -45,6 +45,7 @@ import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { SalesPdfActions } from "@/components/sales/sales-pdf-actions";
 import { formatPdfBdt, formatPdfDate, type SalesPdfData } from "@/lib/sales-pdf";
+import { parseTerms, resolveTerms } from "@/components/sales/terms-editor";
 
 interface QuotationOrderItem {
   id: string;
@@ -151,6 +152,7 @@ export interface QuotationRecord {
   order_date?: string | null;
   deadline?: string | null;
   notes?: string | null;
+  terms?: string | string[] | null;
   prospect_notes?: string | null;
   advance_payments?: string | any[] | null;
   status_history?: string | any[] | null;
@@ -158,16 +160,6 @@ export interface QuotationRecord {
   created_at: string;
   updated_at?: string;
 }
-
-const QUOTATION_TERMS = [
-  "All Prices Exclude VAT/Taxes",
-  "Media Buying Costs Billed Separately",
-  "Third-Party Production Costs Additional",
-  "Additional Revisions Chargeable free till 3 requests (After that charge will be applicable)",
-  "Out-of-Scope Work Will Be Invoiced Separately",
-  "Work Begins After Payment Confirmation",
-  "Approved Work Is Non-Refundable",
-];
 
 const FALLBACK_DEMO_QUOTATION: QuotationRecord = {
   id: "demo-prj-1",
@@ -266,6 +258,7 @@ export default function QuotationDetailPage() {
           prj.order_date,
           prj.deadline,
           prj.notes,
+          prj.terms,
           prj.advance_payments,
           prj.status_history,
           p.notes AS prospect_notes,
@@ -402,6 +395,7 @@ export default function QuotationDetailPage() {
   const quotation: QuotationRecord | null =
     quotationData || (isLoading ? null : FALLBACK_DEMO_QUOTATION);
   const stageColor = quotation?.status ? resolveQuotationStageColor(quotation.status) : "#16A34A";
+  const quotationTerms = resolveTerms(parseTerms(quotation?.terms));
   // Extract order items, notes, discount, and payment records from quotation.notes
   const {
     orderItems,
@@ -722,7 +716,7 @@ export default function QuotationDetailPage() {
         notes: p.notes || "N/A",
         recordedBy: p.recordedBy || "N/A",
       })),
-      terms: QUOTATION_TERMS,
+      terms: quotationTerms,
       totals,
       amountDue: !isPaid && amountDue > 0.01 ? formatPdfBdt(amountDue) : null,
       isPaid,
@@ -1211,8 +1205,8 @@ export default function QuotationDetailPage() {
                   <ScrollText className="size-3.5 text-[#67B239]" /> Terms & Conditions
                 </h4>
                 <ol className="list-decimal pl-4 space-y-0.5 text-[11px] leading-snug text-muted-foreground">
-                  {QUOTATION_TERMS.map((term) => (
-                    <li key={term}>{term}</li>
+                  {quotationTerms.map((term, index) => (
+                    <li key={index}>{term}</li>
                   ))}
                 </ol>
               </div>

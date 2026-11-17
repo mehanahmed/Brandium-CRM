@@ -55,6 +55,7 @@ import {
 import { StatusOverviewCard } from "@/components/dashboard/status-timeline";
 import { ordersQueryOptions } from "@/lib/orders";
 import { FinanceSummaryCard } from "@/components/dashboard/finance-summary-card";
+import { PipelineSummaryCards } from "@/components/dashboard/pipeline-summary-cards";
 
 export default function DashboardPage() {
   const { user, isAdmin } = useAuth();
@@ -85,7 +86,7 @@ export default function DashboardPage() {
   });
   const expenseQuery = useQuery({
     ...dashboardExpenseQuery(range, isAdmin ? filterUserId : userId),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && isAdmin,
   });
   const finance = computeFinanceSummary(ordersQuery.data ?? [], range, filterUserId);
   const financeLoading = ordersQuery.isLoading;
@@ -107,7 +108,7 @@ export default function DashboardPage() {
 
   const expenseSeriesQuery = useQuery({
     ...dashboardExpenseSeriesQuery(range, isAdmin ? filterUserId : userId),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && isAdmin,
   });
   const salesExpenseSeries = computeSalesExpenseSeries(
     ordersQuery.data ?? [],
@@ -257,6 +258,32 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* Prospects pipeline summary cards */}
+      <PipelineSummaryCards
+        userId={userId}
+        isAdmin={isAdmin}
+        filterUserId={filterUserId}
+        range={range}
+      />
+
+      {/* Status timeline overviews (Project & Prospect) */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 print:hidden">
+        <StatusOverviewCard
+          title="Project Overview"
+          description="Project distribution by status for the selected period."
+          icon={Briefcase}
+          steps={projectSteps}
+          isLoading={financeLoading}
+        />
+        <StatusOverviewCard
+          title="Prospect Overview"
+          description="Prospect distribution by stage for the selected period."
+          icon={Users}
+          steps={pipelineQuery.data ?? []}
+          isLoading={pipelineQuery.isLoading}
+        />
+      </div>
+
       {/* 3. Middle Section: Revenues and Expenses (Left) & Your Performance (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
         {/* Left: Sales and expenses (8 cols) */}
@@ -396,23 +423,6 @@ export default function DashboardPage() {
             filterUserId={filterUserId}
           />
         </motion.div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 print:hidden">
-        <StatusOverviewCard
-          title="Project Overview"
-          description="Project distribution by status for the selected period."
-          icon={Briefcase}
-          steps={projectSteps}
-          isLoading={financeLoading}
-        />
-        <StatusOverviewCard
-          title="Prospect Overview"
-          description="Prospect distribution by stage for the selected period."
-          icon={Users}
-          steps={pipelineQuery.data ?? []}
-          isLoading={pipelineQuery.isLoading}
-        />
       </div>
 
       {/* Add Prospect / New Pitch Modal */}

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Mail, Lock, Eye, EyeOff, LogIn, ShieldCheck, User } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, LogIn } from "lucide-react";
 
 import { signInWithPassword } from "@/lib/auth-client";
 import { useAuth } from "@/lib/auth";
@@ -19,13 +19,6 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [suspendedModalOpen, setSuspendedModalOpen] = useState(false);
-
-  const isProduction =
-    process.env.NODE_ENV === "production" ||
-    (typeof window !== "undefined" &&
-      (window.location.hostname.includes("brandiumagency.com") ||
-        (!window.location.hostname.includes("localhost") &&
-          !window.location.hostname.includes("127.0.0.1"))));
 
   useEffect(() => {
     if (!loading && session) {
@@ -51,8 +44,9 @@ export default function LoginPage() {
 
     const userId = data.user.id;
     const userName = data.user.user_metadata?.full_name || targetEmail.split("@")[0] || "User";
-    const userRole = (data.user.user_metadata?.role || "agent") as "admin" | "agent";
-    setAuthenticatedDbSession(userId, userName, targetEmail, userRole);
+    const userRole = (data.user.user_metadata?.role || "agent") as string;
+    const userPermissions = (data.user.user_metadata?.permissions as string[]) || [];
+    setAuthenticatedDbSession(userId, userName, targetEmail, userRole, userPermissions);
 
     setSubmitting(false);
     toast.success(`Signed in successfully as ${userName} (${userRole.toUpperCase()})!`);
@@ -157,36 +151,6 @@ export default function LoginPage() {
             >
               {submitting ? "Signing in..." : "Sign In"}
             </button>
-
-            {/* Instant Demo Login Buttons (Development / Demo Mode Only) */}
-            {!isProduction && (
-              <div className="pt-2 border-t border-slate-200/70 mt-5 space-y-2">
-                <p className="text-[10px] uppercase tracking-wider font-semibold text-slate-400 text-center">
-                  Instant Demo Access
-                </p>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => void performLogin("admin@example.com", "Admin@12345")}
-                    disabled={submitting}
-                    className="h-10 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-75"
-                  >
-                    <ShieldCheck className="size-3.5 text-[#67B239]" />
-                    <span>Admin Login</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void performLogin("agent@brandium.com", "Agent@12345")}
-                    disabled={submitting}
-                    className="h-10 rounded-xl bg-white border border-slate-200/90 hover:bg-slate-50 text-slate-800 text-xs font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-75"
-                  >
-                    <User className="size-3.5 text-blue-600" />
-                    <span>Agent Login</span>
-                  </button>
-                </div>
-              </div>
-            )}
           </form>
         </div>
       </main>

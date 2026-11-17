@@ -63,6 +63,15 @@ async function runMigration() {
   // 6. users
   await addCol("users", "is_active", "TINYINT(1) NOT NULL DEFAULT 1");
 
+  // 6b. roles
+  await addCol("roles", "is_system", "TINYINT(1) NOT NULL DEFAULT 0");
+  await conn.query(`
+    UPDATE \`roles\`
+    SET \`is_system\` = 1
+    WHERE \`id\` IN ('role-global-admin', 'role-global-agent', 'role-global-artist')
+       OR LOWER(\`name\`) IN ('admin', 'agent', 'artist');
+  `);
+
   // 7. Ensure default stages exist
   const defaultStages = [
     { id: "prospect", name: "Prospect", group: "new", order: 1 },

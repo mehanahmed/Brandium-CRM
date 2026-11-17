@@ -38,6 +38,8 @@ MYSQL_DATABASE=brandium_crm
 MYSQL_CONNECTION_LIMIT=20
 MYSQL_TIMEZONE=+06:00
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+SESSION_SECRET=<long random string; keeps logins valid across restarts>
+INITIAL_ADMIN_PASSWORD=<optional; password of the first admin on an empty database>
 ```
 
 ### Scripts

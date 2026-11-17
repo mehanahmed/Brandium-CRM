@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { UserCheck, Mail, User } from "lucide-react";
+import { UserCheck, Mail, User, ShieldCheck } from "lucide-react";
 
 import {
   Dialog,
@@ -14,7 +14,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { updateCrmUser, type CrmUser } from "@/lib/admin-users";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { updateCrmUser, type CrmUser, type CrmUserRole } from "@/lib/admin-users";
+import { rolesQueryOptions } from "@/lib/roles";
 
 interface AdminEditUserInfoModalProps {
   open: boolean;
@@ -24,14 +32,17 @@ interface AdminEditUserInfoModalProps {
 
 export function AdminEditUserInfoModal({ open, onOpenChange, user }: AdminEditUserInfoModalProps) {
   const queryClient = useQueryClient();
+  const { data: availableRoles = [] } = useQuery(rolesQueryOptions());
 
   const [name, setName] = useState<string>("");
   const [email, setEmail] = useState<string>("");
+  const [role, setRole] = useState<CrmUserRole>("AGENT");
 
   useEffect(() => {
     if (user) {
       setName(user.name || "");
       setEmail(user.email || "");
+      setRole(user.role || "AGENT");
     }
   }, [user]);
 
@@ -44,13 +55,14 @@ export function AdminEditUserInfoModal({ open, onOpenChange, user }: AdminEditUs
       return updateCrmUser(user.id, {
         name: name.trim(),
         email: email.trim(),
-        role: user.role,
+        role: role,
         status: user.status,
       });
     },
     onSuccess: (updated) => {
       toast.success(`User ${updated.name} updated successfully!`);
       void queryClient.invalidateQueries({ queryKey: ["crm-users"] });
+      void queryClient.invalidateQueries({ queryKey: ["admin-roles"] });
       onOpenChange(false);
     },
     onError: (err: Error) => {
@@ -76,7 +88,7 @@ export function AdminEditUserInfoModal({ open, onOpenChange, user }: AdminEditUs
             </DialogTitle>
           </div>
           <DialogDescription className="text-xs text-slate-500 dark:text-slate-400">
-            Update full name and email address for this user account.
+            Update full name, email address, and assigned role for this user account.
           </DialogDescription>
         </DialogHeader>
 
@@ -116,6 +128,40 @@ export function AdminEditUserInfoModal({ open, onOpenChange, user }: AdminEditUs
                 required
               />
             </div>
+          </div>
+
+          {/* Assigned Role */}
+          <div className="space-y-1.5">
+            <Label
+              htmlFor="modal_user_role"
+              className="text-xs font-semibold flex items-center gap-1"
+            >
+              <ShieldCheck className="size-3.5 text-blue-600" />
+              Assigned Role <span className="text-red-500">*</span>
+            </Label>
+            <Select
+              value={String(role).toUpperCase()}
+              onValueChange={(val: string) => setRole(val as CrmUserRole)}
+            >
+              <SelectTrigger id="modal_user_role" className="text-xs">
+                <SelectValue placeholder="Select Role" />
+              </SelectTrigger>
+              <SelectContent>
+                {availableRoles.length > 0 ? (
+                  availableRoles.map((r) => (
+                    <SelectItem key={r.id} value={r.name.toUpperCase()}>
+                      {r.name.toUpperCase()} {r.is_system ? "(System)" : "(Custom)"}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <>
+                    <SelectItem value="AGENT">AGENT (System)</SelectItem>
+                    <SelectItem value="ARTIST">ARTIST (System)</SelectItem>
+                    <SelectItem value="ADMIN">ADMIN (System)</SelectItem>
+                  </>
+                )}
+              </SelectContent>
+            </Select>
           </div>
 
           <DialogFooter className="gap-2 sm:gap-2 pt-4">

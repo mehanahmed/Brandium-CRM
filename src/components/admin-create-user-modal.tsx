@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   UserPlus,
@@ -31,6 +31,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createCrmUser, type CrmUserRole } from "@/lib/admin-users";
+import { uploadImageFile } from "@/lib/upload";
+import { rolesQueryOptions } from "@/lib/roles";
 
 interface AdminCreateUserModalProps {
   open: boolean;
@@ -40,6 +42,7 @@ interface AdminCreateUserModalProps {
 export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModalProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { data: availableRoles = [] } = useQuery(rolesQueryOptions());
 
   const [name, setName] = useState<string>("");
   const [email, setEmail] = useState<string>("");
@@ -49,6 +52,7 @@ export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModa
   const [showConfirm, setShowConfirm] = useState<boolean>(false);
   const [role, setRole] = useState<CrmUserRole>("AGENT");
   const [avatarUrl, setAvatarUrl] = useState<string>("");
+  const [isUploading, setIsUploading] = useState(false);
 
   const resetForm = () => {
     setName("");
@@ -61,19 +65,23 @@ export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModa
     setAvatarUrl("");
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // The image is saved as a file under /uploads; only its short link goes into MySQL
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        toast.error("Image file size should be less than 2MB.");
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === "string") setAvatarUrl(reader.result);
-      };
-      reader.readAsDataURL(file);
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Image file size should be less than 2MB.");
+      return;
     }
+    setIsUploading(true);
+    const res = await uploadImageFile(file);
+    setIsUploading(false);
+    if (!res.success || !res.url) {
+      toast.error(res.error || "Image upload failed.");
+      return;
+    }
+    setAvatarUrl(res.url);
   };
 
   const createMutation = useMutation({
@@ -90,7 +98,7 @@ export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModa
       return createCrmUser({
         name: name.trim(),
         email: email.trim(),
-        password_hash: password,
+        password,
         role,
         status: "Active",
         avatar_url: avatarUrl.trim() || null,
@@ -259,9 +267,10 @@ export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModa
                     variant="outline"
                     className="gap-1.5 px-2.5 py-1.5 h-auto text-xs font-medium border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800 text-foreground rounded-xl shadow-2xs"
                     onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
                   >
                     <UploadCloud className="size-3.5 text-[#67B239]" />
-                    Upload
+                    {isUploading ? "Uploading..." : "Upload"}
                   </Button>
                   <p className="text-[10px] text-slate-400 dark:text-slate-500 leading-tight">
                     JPG, PNG — max 2MB
@@ -284,9 +293,19 @@ export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModa
                   <SelectValue placeholder="Select Role" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="AGENT">AGENT</SelectItem>
-                  <SelectItem value="ARTIST">ARTIST</SelectItem>
-                  <SelectItem value="ADMIN">ADMIN</SelectItem>
+                  {availableRoles.length > 0 ? (
+                    availableRoles.map((r) => (
+                      <SelectItem key={r.id} value={r.name.toUpperCase()}>
+                        {r.name.toUpperCase()} {r.is_system ? "(System)" : "(Custom)"}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <>
+                      <SelectItem value="AGENT">AGENT (System)</SelectItem>
+                      <SelectItem value="ARTIST">ARTIST (System)</SelectItem>
+                      <SelectItem value="ADMIN">ADMIN (System)</SelectItem>
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -304,7 +323,7 @@ export function AdminCreateUserModal({ open, onOpenChange }: AdminCreateUserModa
             <Button
               type="submit"
               className="px-5 py-2 h-auto text-xs font-medium bg-[#67B239] hover:bg-[#5aa030] text-white rounded-xl shadow-2xs transition-colors"
-              disabled={createMutation.isPending}
+              disabled={createMutation.isPending || isUploading}
             >
               {createMutation.isPending ? "Creating..." : "Create User"}
             </Button>

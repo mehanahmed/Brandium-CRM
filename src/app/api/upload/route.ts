@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readSession, unauthorized } from "@/lib/session-server";
 
 const ALLOWED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".svg", ".pdf"];
+
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+const rejectSize = () =>
+  NextResponse.json(
+    { success: false, error: "File is too large. The limit is 10 MB." },
+    { status: 413 },
+  );
 
 const rejectType = () =>
   NextResponse.json(
@@ -11,6 +20,10 @@ const rejectType = () =>
   );
 
 export async function POST(req: Request) {
+  if (!readSession(req)) return unauthorized();
+  // Base64 JSON bodies are about a third larger than the file itself
+  if (Number(req.headers.get("content-length") || 0) > MAX_UPLOAD_BYTES * 1.4) return rejectSize();
+
   try {
     const contentType = req.headers.get("content-type") || "";
 
@@ -21,6 +34,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ success: false, error: "No file uploaded" }, { status: 400 });
       }
 
+      if (file.size > MAX_UPLOAD_BYTES) return rejectSize();
       const bytes = await file.arrayBuffer();
       const buffer = Buffer.from(bytes);
 
@@ -51,6 +65,7 @@ export async function POST(req: Request) {
 
     const cleanBase64 = base64.replace(/^data:[^;]+;base64,/, "");
     const buffer = Buffer.from(cleanBase64, "base64");
+    if (buffer.length > MAX_UPLOAD_BYTES) return rejectSize();
 
     const uploadDir = path.resolve(process.cwd(), "public", "uploads");
     await fs.mkdir(uploadDir, { recursive: true });

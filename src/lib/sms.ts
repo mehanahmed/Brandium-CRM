@@ -74,12 +74,14 @@ export type ProspectOption = {
   contact_name: string;
   business_name?: string | null | undefined;
   phone?: string | null | undefined;
+  stage_id?: string | null | undefined;
+  assigned_to?: string | null | undefined;
 };
 
 export async function fetchProspectOptions(): Promise<ProspectOption[]> {
   try {
     const res = await runMySQLQuery<Record<string, unknown>[]>(
-      "SELECT id, contact_name, business_name, phone FROM `prospects` WHERE is_active = 1 ORDER BY contact_name ASC;",
+      "SELECT id, contact_name, business_name, phone, stage_id, assigned_to FROM `prospects` WHERE is_active = 1 ORDER BY contact_name ASC;",
     );
     if (!res.success || !Array.isArray(res.data)) {
       return [];
@@ -89,6 +91,8 @@ export async function fetchProspectOptions(): Promise<ProspectOption[]> {
       contact_name: String(p["contact_name"] || "Prospect"),
       business_name: (p["business_name"] as string) || undefined,
       phone: (p["phone"] as string) || undefined,
+      stage_id: (p["stage_id"] as string) || undefined,
+      assigned_to: (p["assigned_to"] as string) || undefined,
     }));
   } catch (err) {
     console.warn("fetchProspectOptions MySQL error:", err);
@@ -98,7 +102,8 @@ export async function fetchProspectOptions(): Promise<ProspectOption[]> {
 
 export const prospectsOptionsQuery = () =>
   queryOptions({
-    queryKey: ["prospects", "options"],
+    // Own key: meetings.ts caches a different prospect list under ["prospects", "options"]
+    queryKey: ["prospects", "sms-options"],
     queryFn: fetchProspectOptions,
   });
 

@@ -12,6 +12,10 @@ import {
   CheckSquare,
   Square,
   Search,
+  CheckCircle2,
+  Layers,
+  UserCheck,
+  type LucideIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -19,7 +23,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { getInitials } from "@/components/orders/assign-stage-dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -38,14 +44,38 @@ import {
 } from "@/lib/sms";
 import { agentOptionsQueryOptions } from "@/lib/won-sales";
 import { SmsBulkConfirmModal } from "@/components/sms-bulk-confirm-modal";
+import { stagesQuery } from "@/lib/stages";
+import { cn } from "@/lib/utils";
 
-const PIPELINE_STAGES = [
-  "Opportunity Created",
-  "Follow-up",
-  "Proposal Sent",
-  "Negotiation",
-  "Sales Won",
-  "Denied Payment",
+const normalizeStage = (value?: string | null) =>
+  (value || "").toLowerCase().replace(/[^a-z]/g, "");
+
+type BulkMode = "manual" | "stage" | "agent";
+
+const AUDIENCE_MODES: {
+  value: BulkMode;
+  title: string;
+  description: string;
+  icon: LucideIcon;
+}[] = [
+  {
+    value: "manual",
+    title: "Select Prospects",
+    description: "Pick individual prospects from the list.",
+    icon: Users,
+  },
+  {
+    value: "stage",
+    title: "By Stage",
+    description: "Send to every prospect in a pipeline stage.",
+    icon: Layers,
+  },
+  {
+    value: "agent",
+    title: "By Agent",
+    description: "Send to every prospect assigned to an agent.",
+    icon: UserCheck,
+  },
 ];
 
 export default function SendSmsPage() {
@@ -59,8 +89,8 @@ export default function SendSmsPage() {
   const [singleProspectName, setSingleProspectName] = useState<string>("");
   const [singleMessage, setSingleMessage] = useState<string>("");
 
-  const [bulkFilterMode, setBulkFilterMode] = useState<"manual" | "stage" | "agent">("manual");
-  const [selectedStage, setSelectedStage] = useState<string>("Opportunity Created");
+  const [bulkFilterMode, setBulkFilterMode] = useState<BulkMode>("manual");
+  const [selectedStage, setSelectedStage] = useState<string>("");
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [bulkSearch, setBulkSearch] = useState<string>("");
   const [selectedProspectIds, setSelectedProspectIds] = useState<string[]>([]);
@@ -69,6 +99,7 @@ export default function SendSmsPage() {
 
   const { data: prospectOptions = [] } = useQuery(prospectsOptionsQuery());
   const { data: agentOptions = [] } = useQuery(agentOptionsQueryOptions());
+  const { data: stageOptions = [] } = useQuery(stagesQuery());
 
   const handleSelectSingleProspect = (id: string) => {
     setSelectedProspectId(id);
@@ -101,33 +132,26 @@ export default function SendSmsPage() {
     },
   });
 
-  let targetBulkRecipients: SmsRecipientInput[] = [];
+  const toRecipients = (list: typeof prospectOptions): SmsRecipientInput[] =>
+    list
+      .filter((p) => Boolean(p.phone))
+      .map((p) => ({ prospect_id: p.id, prospect_name: p.contact_name, phone: p.phone! }));
 
-  if (bulkFilterMode === "manual") {
-    targetBulkRecipients = prospectOptions
-      .filter((p) => selectedProspectIds.includes(p.id) && Boolean(p.phone))
-      .map((p) => ({
-        prospect_id: p.id,
-        prospect_name: p.contact_name,
-        phone: p.phone!,
-      }));
-  } else if (bulkFilterMode === "stage") {
-    targetBulkRecipients = prospectOptions
-      .filter((p) => Boolean(p.phone))
-      .map((p) => ({
-        prospect_id: p.id,
-        prospect_name: p.contact_name,
-        phone: p.phone!,
-      }));
-  } else if (bulkFilterMode === "agent") {
-    targetBulkRecipients = prospectOptions
-      .filter((p) => Boolean(p.phone))
-      .map((p) => ({
-        prospect_id: p.id,
-        prospect_name: p.contact_name,
-        phone: p.phone!,
-      }));
-  }
+  const stageTarget = stageOptions.find((st) => st.id === selectedStage);
+  // prospects.stage_id may hold the id, a legacy slug ("follow_up") or the stage name
+  const stageKeys = stageTarget
+    ? [normalizeStage(stageTarget.id), normalizeStage(stageTarget.name)]
+    : [];
+  const recipientsByMode: Record<BulkMode, SmsRecipientInput[]> = {
+    manual: toRecipients(prospectOptions.filter((p) => selectedProspectIds.includes(p.id))),
+    stage: toRecipients(
+      prospectOptions.filter((p) => stageKeys.includes(normalizeStage(p.stage_id))),
+    ),
+    agent: selectedAgentId
+      ? toRecipients(prospectOptions.filter((p) => p.assigned_to === selectedAgentId))
+      : [],
+  };
+  const targetBulkRecipients = recipientsByMode[bulkFilterMode];
 
   const bulkMutation = useMutation({
     mutationFn: async () => {
@@ -154,7 +178,10 @@ export default function SendSmsPage() {
   };
 
   const selectAllFilteredProspects = () => {
-    const allIds = prospectOptions.filter((p) => Boolean(p.phone)).map((p) => p.id);
+    const term = bulkSearch.toLowerCase();
+    const allIds = prospectOptions
+      .filter((p) => Boolean(p.phone) && (!term || p.contact_name.toLowerCase().includes(term)))
+      .map((p) => p.id);
     setSelectedProspectIds(allIds);
   };
 
@@ -303,162 +330,134 @@ export default function SendSmsPage() {
                   <ListFilter className="size-3.5 text-blue-600" />
                   Audience Selection Method
                 </Label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <Button
-                    type="button"
-                    variant={bulkFilterMode === "manual" ? "default" : "outline"}
-                    className={
-                      bulkFilterMode === "manual"
-                        ? "bg-[#67B239] hover:bg-[#5aa030] text-white"
-                        : ""
-                    }
-                    size="sm"
-                    onClick={() => setBulkFilterMode("manual")}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
+                  <AudienceCard
+                    mode="manual"
+                    isActive={bulkFilterMode === "manual"}
+                    count={recipientsByMode.manual.length}
+                    onActivate={() => setBulkFilterMode("manual")}
                   >
-                    Select Multiple Prospects
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={bulkFilterMode === "stage" ? "default" : "outline"}
-                    className={
-                      bulkFilterMode === "stage" ? "bg-[#67B239] hover:bg-[#5aa030] text-white" : ""
-                    }
-                    size="sm"
-                    onClick={() => setBulkFilterMode("stage")}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1.5">
+                        <div className="relative flex-1 min-w-0">
+                          <Search className="absolute left-2.5 top-2 size-3.5 text-muted-foreground" />
+                          <Input
+                            aria-label="Search prospects"
+                            placeholder="Search prospects..."
+                            value={bulkSearch}
+                            onChange={(e) => setBulkSearch(e.target.value)}
+                            className="pl-8 h-8 text-xs bg-white dark:bg-background"
+                          />
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={selectAllFilteredProspects}
+                        >
+                          All
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={clearProspectSelection}
+                        >
+                          Clear
+                        </Button>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto divide-y divide-border/60 rounded-md border bg-white dark:bg-background">
+                        {prospectOptions
+                          .filter(
+                            (p) =>
+                              !bulkSearch ||
+                              p.contact_name.toLowerCase().includes(bulkSearch.toLowerCase()),
+                          )
+                          .map((p) => {
+                            const isSelected = selectedProspectIds.includes(p.id);
+                            return (
+                              <button
+                                key={p.id}
+                                type="button"
+                                aria-pressed={isSelected}
+                                className="flex w-full items-center justify-between gap-2 p-2 text-left text-xs hover:bg-slate-50 dark:hover:bg-muted/40 cursor-pointer"
+                                onClick={() => toggleSelectProspect(p.id)}
+                              >
+                                <span className="flex min-w-0 items-center gap-2">
+                                  {isSelected ? (
+                                    <CheckSquare className="size-4 shrink-0 text-[#67B239]" />
+                                  ) : (
+                                    <Square className="size-4 shrink-0 text-slate-300" />
+                                  )}
+                                  <span className="truncate font-semibold text-foreground">
+                                    {p.contact_name}
+                                  </span>
+                                </span>
+                                <span className="shrink-0 font-mono text-muted-foreground text-[11px]">
+                                  {p.phone || "No phone"}
+                                </span>
+                              </button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  </AudienceCard>
+                  <AudienceCard
+                    mode="stage"
+                    isActive={bulkFilterMode === "stage"}
+                    count={recipientsByMode.stage.length}
+                    onActivate={() => setBulkFilterMode("stage")}
                   >
-                    OR Select by Stage
-                  </Button>
-                  <Button
-                    type="button"
-                    variant={bulkFilterMode === "agent" ? "default" : "outline"}
-                    className={
-                      bulkFilterMode === "agent" ? "bg-[#67B239] hover:bg-[#5aa030] text-white" : ""
-                    }
-                    size="sm"
-                    onClick={() => setBulkFilterMode("agent")}
+                    <Select value={selectedStage} onValueChange={setSelectedStage}>
+                      <SelectTrigger
+                        aria-label="Target prospect stage"
+                        className="text-xs bg-white dark:bg-background"
+                      >
+                        <SelectValue placeholder="Select Stage" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {stageOptions
+                          .filter((stg) => stg.is_active)
+                          .map((stg) => (
+                            <SelectItem key={stg.id} value={stg.id} className="text-xs">
+                              {stg.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </AudienceCard>
+                  <AudienceCard
+                    mode="agent"
+                    isActive={bulkFilterMode === "agent"}
+                    count={recipientsByMode.agent.length}
+                    onActivate={() => setBulkFilterMode("agent")}
                   >
-                    OR Select by Agent
-                  </Button>
+                    <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
+                      <SelectTrigger
+                        aria-label="Target assigned agent"
+                        className="text-xs bg-white dark:bg-background"
+                      >
+                        <SelectValue placeholder="Select Agent" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {agentOptions.map((ag) => (
+                          <SelectItem key={ag.id} value={ag.id} className="text-xs">
+                            <span className="flex items-center gap-2">
+                              <Avatar className="size-6">
+                                {ag.avatar_url && <AvatarImage src={ag.avatar_url} alt="" />}
+                                <AvatarFallback className="bg-[#0a2e5c] text-[10px] font-semibold text-white">
+                                  {getInitials(ag.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="truncate">{ag.name}</span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </AudienceCard>
                 </div>
               </div>
-
-              {bulkFilterMode === "manual" && (
-                <div className="space-y-2 border rounded-lg p-3 bg-slate-50/50 dark:bg-muted/30">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="relative flex-1 min-w-48">
-                      <Search className="absolute left-2.5 top-2 size-3.5 text-muted-foreground" />
-                      <Input
-                        placeholder="Search prospects..."
-                        value={bulkSearch}
-                        onChange={(e) => setBulkSearch(e.target.value)}
-                        className="pl-8 h-8 text-xs bg-white dark:bg-background"
-                      />
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={selectAllFilteredProspects}
-                      >
-                        Select All ({prospectOptions.length})
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 text-xs"
-                        onClick={clearProspectSelection}
-                      >
-                        Clear
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="max-h-48 overflow-y-auto divide-y divide-border/60 rounded-md border bg-white dark:bg-background">
-                    {prospectOptions
-                      .filter(
-                        (p) =>
-                          !bulkSearch ||
-                          p.contact_name.toLowerCase().includes(bulkSearch.toLowerCase()),
-                      )
-                      .map((p) => {
-                        const isSelected = selectedProspectIds.includes(p.id);
-                        return (
-                          <div
-                            key={p.id}
-                            className="flex items-center justify-between p-2 hover:bg-slate-50 dark:hover:bg-muted/40 cursor-pointer text-xs"
-                            onClick={() => toggleSelectProspect(p.id)}
-                          >
-                            <div className="flex items-center gap-2">
-                              {isSelected ? (
-                                <CheckSquare className="size-4 text-[#67B239]" />
-                              ) : (
-                                <Square className="size-4 text-slate-300" />
-                              )}
-                              <span className="font-semibold text-foreground">
-                                {p.contact_name}
-                              </span>
-                              {p.business_name && (
-                                <span className="text-muted-foreground text-[11px]">
-                                  ({p.business_name})
-                                </span>
-                              )}
-                            </div>
-                            <span className="font-mono text-muted-foreground text-[11px]">
-                              {p.phone || "No phone"}
-                            </span>
-                          </div>
-                        );
-                      })}
-                  </div>
-                </div>
-              )}
-
-              {bulkFilterMode === "stage" && (
-                <div className="space-y-1.5 border rounded-lg p-3 bg-slate-50/50 dark:bg-muted/30">
-                  <Label htmlFor="stage_select" className="text-xs font-semibold">
-                    Target Prospect Stage
-                  </Label>
-                  <Select value={selectedStage} onValueChange={setSelectedStage}>
-                    <SelectTrigger
-                      id="stage_select"
-                      className="text-xs bg-white dark:bg-background"
-                    >
-                      <SelectValue placeholder="Select Stage" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PIPELINE_STAGES.map((stg) => (
-                        <SelectItem key={stg} value={stg} className="text-xs">
-                          {stg}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {bulkFilterMode === "agent" && (
-                <div className="space-y-1.5 border rounded-lg p-3 bg-slate-50/50 dark:bg-muted/30">
-                  <Label htmlFor="agent_select" className="text-xs font-semibold">
-                    Target Assigned Tele-sales Agent
-                  </Label>
-                  <Select value={selectedAgentId} onValueChange={setSelectedAgentId}>
-                    <SelectTrigger
-                      id="agent_select"
-                      className="text-xs bg-white dark:bg-background"
-                    >
-                      <SelectValue placeholder="Select Agent" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {agentOptions.map((ag) => (
-                        <SelectItem key={ag.id} value={ag.id} className="text-xs">
-                          {ag.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
 
               <div className="rounded-md bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 p-2.5 text-xs flex items-center justify-between text-blue-900 dark:text-blue-200 font-medium">
                 <span>Selected Broadcast Audience:</span>
@@ -517,5 +516,70 @@ export default function SendSmsPage() {
         isSending={bulkMutation.isPending}
       />
     </div>
+  );
+}
+
+/** One audience option; using anything inside it makes it the broadcast audience. */
+function AudienceCard({
+  mode,
+  isActive,
+  count,
+  onActivate,
+  children,
+}: {
+  mode: BulkMode;
+  isActive: boolean;
+  count: number;
+  onActivate: () => void;
+  children: React.ReactNode;
+}) {
+  const { title, description, icon: Icon } = AUDIENCE_MODES.find((m) => m.value === mode)!;
+  return (
+    <section
+      aria-label={title}
+      onPointerDownCapture={onActivate}
+      onFocusCapture={onActivate}
+      className={cn(
+        "flex flex-col gap-3 rounded-xl border-2 p-4 transition-all",
+        isActive
+          ? "border-[#67B239] bg-[#67B239]/5 shadow-sm"
+          : "border-slate-200 bg-card hover:border-[#67B239]/50 dark:border-slate-800",
+      )}
+    >
+      <button
+        type="button"
+        aria-pressed={isActive}
+        onClick={onActivate}
+        className="flex items-start gap-3 text-left cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#67B239]/50"
+      >
+        <span
+          className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded-lg",
+            isActive
+              ? "bg-[#67B239] text-white"
+              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+          )}
+        >
+          <Icon className="size-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-[#0a2e5c] dark:text-slate-100">
+            {title}
+            {isActive && <CheckCircle2 className="size-4 text-[#67B239]" />}
+          </span>
+          <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span>
+        </span>
+        <Badge
+          variant="outline"
+          className={cn(
+            "shrink-0 font-semibold",
+            isActive && "border-[#67B239] text-[#55962e] dark:text-[#7ac142]",
+          )}
+        >
+          {count}
+        </Badge>
+      </button>
+      {children}
+    </section>
   );
 }

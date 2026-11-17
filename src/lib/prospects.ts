@@ -3,6 +3,7 @@ import { z } from "zod";
 import { formatStageSlugOrName, parseNotesToItems, type StageNoteItem } from "@/lib/stages";
 import { runMySQLQuery } from "@/lib/mysql-api";
 import { getMySQLTimestamp } from "@/lib/mysql-client";
+import { PROSPECT_IDS_SQL, PROSPECT_PHONE_MATCH_SQL } from "@/lib/trusted-sql";
 
 export const prospectFiltersSchema = z.object({
   page: z.number().catch(1),
@@ -29,6 +30,7 @@ export type Prospect = {
   address: string | null;
   website_url?: string | null;
   logo_url?: string | null;
+  source?: string | null;
   service_id: string | null;
   stage_id: string | null;
   assigned_to: string | null;
@@ -441,9 +443,14 @@ export const prospectsQuery = (filters: ProspectFilters, userId: string, isAdmin
     },
   });
 
-export const prospectsStatsQuery = (userId: string, isAdmin: boolean) =>
+export const prospectsStatsQuery = (
+  userId: string,
+  isAdmin: boolean,
+  filterUserId?: string | undefined,
+  range?: { from?: string | undefined; to?: string | undefined } | undefined,
+) =>
   queryOptions({
-    queryKey: ["prospects-stats", userId, isAdmin],
+    queryKey: ["prospects-stats", userId, isAdmin, filterUserId, range],
     queryFn: async () => {
       let allProspects: Record<string, unknown>[] = [];
       try {
@@ -455,6 +462,7 @@ export const prospectsStatsQuery = (userId: string, isAdmin: boolean) =>
             p.assigned_to,
             p.assigned_artist_id,
             p.created_by,
+            p.created_at,
             COALESCE(st.name, p.stage_id, 'Prospect') AS stage_name,
             st.stage_group AS stage_group
           FROM \`prospects\` p
@@ -469,14 +477,32 @@ export const prospectsStatsQuery = (userId: string, isAdmin: boolean) =>
         console.warn("prospectsStatsQuery notice:", err);
       }
 
-      // User data scoping: regular user sees only their own assigned/created prospects stats; admin sees all
-      if (!isAdmin && userId) {
+      // User data scoping: regular user sees only their own assigned/created prospects stats; admin sees all or filtered
+      if (filterUserId) {
+        allProspects = allProspects.filter(
+          (p) =>
+            p["assigned_to"] === filterUserId ||
+            p["assigned_artist_id"] === filterUserId ||
+            p["created_by"] === filterUserId,
+        );
+      } else if (!isAdmin && userId) {
         allProspects = allProspects.filter(
           (p) =>
             p["assigned_to"] === userId ||
             p["assigned_artist_id"] === userId ||
             p["created_by"] === userId,
         );
+      }
+
+      // Filter by date range (inclusive, compared on the yyyy-MM-dd part of created_at)
+      if (range?.from || range?.to) {
+        allProspects = allProspects.filter((p) => {
+          const day = String(p["created_at"] ?? "").slice(0, 10);
+          if (!day) return false;
+          if (range.from && day < range.from) return false;
+          if (range.to && day > range.to) return false;
+          return true;
+        });
       }
 
       const totalProspects = allProspects.length;
@@ -601,9 +627,7 @@ export function formatProspectId(id?: string | null): string {
 
 export async function generateNextProspectId(): Promise<string> {
   try {
-    const res = await runMySQLQuery<Record<string, unknown>[]>(
-      "SELECT `id` FROM `prospects` ORDER BY `created_at` DESC;",
-    );
+    const res = await runMySQLQuery<Record<string, unknown>[]>(PROSPECT_IDS_SQL);
     if (res.success && Array.isArray(res.data) && res.data.length > 0) {
       let maxNum = 0;
       for (const row of res.data) {
@@ -681,24 +705,7 @@ export async function createProspect(input: CreateProspectInput): Promise<Prospe
       \`alternative_phone\`, \`email\`, \`address\`, \`website_url\`, \`logo_url\`,
       \`service_id\`, \`stage_id\`, \`assigned_to\`, \`assigned_artist_id\`,
       \`created_by\`, \`notes\`, \`is_active\`, \`created_at\`, \`updated_at\`
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      \`contact_name\` = VALUES(\`contact_name\`),
-      \`business_name\` = VALUES(\`business_name\`),
-      \`designation\` = VALUES(\`designation\`),
-      \`phone\` = VALUES(\`phone\`),
-      \`alternative_phone\` = VALUES(\`alternative_phone\`),
-      \`email\` = VALUES(\`email\`),
-      \`address\` = VALUES(\`address\`),
-      \`website_url\` = VALUES(\`website_url\`),
-      \`logo_url\` = VALUES(\`logo_url\`),
-      \`service_id\` = VALUES(\`service_id\`),
-      \`stage_id\` = VALUES(\`stage_id\`),
-      \`assigned_to\` = VALUES(\`assigned_to\`),
-      \`assigned_artist_id\` = VALUES(\`assigned_artist_id\`),
-      \`created_by\` = VALUES(\`created_by\`),
-      \`notes\` = VALUES(\`notes\`),
-      \`updated_at\` = VALUES(\`updated_at\`);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?);
   `;
 
   const insertParams = [
@@ -722,10 +729,9 @@ export async function createProspect(input: CreateProspectInput): Promise<Prospe
     now,
   ];
 
+  // A plain INSERT: two prospects created at once with the same next id must not overwrite each other
   const res = await runMySQLQuery(insertSql, insertParams);
-  if (!res?.success) {
-    console.warn("Direct MySQL Query insert warning:", res?.error);
-  }
+  if (!res?.success) throw new Error(res?.error || "The prospect could not be saved.");
 
   return newProspect;
 }
@@ -829,32 +835,9 @@ export async function checkDuplicateProspectPhone(
   const lastDigits = cleanDigits.slice(-9);
 
   try {
-    let sql = `
-      SELECT 
-        p.id, p.contact_name, p.business_name, p.phone, p.alternative_phone,
-        COALESCE(st.name, p.stage_id, 'Prospect') AS stage_name,
-        COALESCE(prof_agent.full_name, u_agent.name, 'Unassigned') AS assigned_agent_name,
-        p.created_at
-      FROM \`prospects\` p
-      LEFT JOIN \`stages\` st ON (p.stage_id = st.id OR p.stage_id = REPLACE(st.id, '-', '_') OR p.stage_id = st.name)
-      LEFT JOIN \`users\` u_agent ON p.assigned_to = u_agent.id
-      LEFT JOIN \`profiles\` prof_agent ON p.assigned_to = prof_agent.id
-      WHERE p.is_active = 1
-        AND (
-          REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(p.phone, ''), ' ', ''), '-', ''), '+', ''), '(', ''), ')', '') LIKE ?
-          OR REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(p.alternative_phone, ''), ' ', ''), '-', ''), '+', ''), '(', ''), ')', '') LIKE ?
-        )
-    `;
-    const params: unknown[] = [`%${lastDigits}%`, `%${lastDigits}%`];
-
-    if (excludeProspectId && excludeProspectId !== "none") {
-      sql += " AND p.id != ?";
-      params.push(excludeProspectId);
-    }
-
-    sql += " LIMIT 1;";
-
-    const res = await runMySQLQuery<Record<string, unknown>[]>(sql, params);
+    // Fixed text so the server can run it unscoped (other agents' leads count as duplicates)
+    const params: unknown[] = [`%${lastDigits}%`, `%${lastDigits}%`, excludeProspectId || ""];
+    const res = await runMySQLQuery<Record<string, unknown>[]>(PROSPECT_PHONE_MATCH_SQL, params);
     if (res.success && Array.isArray(res.data) && res.data.length > 0) {
       const match = res.data[0];
       if (match) {

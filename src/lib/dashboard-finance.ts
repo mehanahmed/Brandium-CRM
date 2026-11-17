@@ -9,6 +9,7 @@ import {
 } from "@/lib/orders";
 import { resolveStageColor } from "@/lib/stages";
 import type { DashboardDateRange } from "@/lib/dashboard";
+import { getMySQLTimestamp } from "@/lib/mysql-client";
 
 export type TimelineStep = { key: string; title: string; color: string; count: number };
 
@@ -28,8 +29,20 @@ export type FinanceSummary = {
 const CANCELLED_STATUS = "canceled";
 const COD_METHODS = ["cod", "courier", "system auto-settled"];
 
+/**
+ * Business day (Dhaka) of a stored time. MySQL DATETIME text is already Dhaka time; payment and
+ * status-history JSON hold UTC ISO times ("...T18:30:00.000Z"), whose first 10 characters are the
+ * UTC day, so 00:30 on the 1st in Dhaka would fall in the previous month.
+ */
+export const businessDay = (value: string | null | undefined): string => {
+  const text = String(value ?? "");
+  if (!/T|Z|[+-]\d\d:\d\d$/.test(text)) return text.slice(0, 10);
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? text.slice(0, 10) : getMySQLTimestamp(date).slice(0, 10);
+};
+
 const inRange = (value: string | null | undefined, range: DashboardDateRange) => {
-  const day = String(value ?? "").slice(0, 10);
+  const day = businessDay(value);
   if (!day) return false;
   if (range.from && day < range.from) return false;
   if (range.to && day > range.to) return false;
@@ -320,7 +333,7 @@ export function computeSalesExpenseSeries(
 
   // "All Time" has no bounds: use the data's own first/last day
   const days = [...Object.keys(salesByDay), ...Object.keys(expensesByDay)].sort();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = businessDay(new Date().toISOString());
   const from = range.from || days[0] || today;
   const to = range.to || days[days.length - 1] || today;
   const start = new Date(`${from}T00:00:00`);

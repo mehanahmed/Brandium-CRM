@@ -12,6 +12,7 @@ import {
   KeyRound,
   Filter,
   ShieldCheck,
+  Shield,
   CheckCircle2,
   XCircle,
   UserCog,
@@ -185,8 +186,11 @@ export default function AdminUsersPage() {
         );
       default:
         return (
-          <Badge variant="secondary" className="text-xs font-semibold px-2.5 py-0.5 rounded-full">
-            {role}
+          <Badge
+            variant="outline"
+            className="bg-[#67B239]/15 text-[#67B239] border-[#67B239]/30 text-xs font-semibold px-2.5 py-0.5 rounded-full gap-1"
+          >
+            <Shield className="size-3 text-[#67B239]" /> {role.toUpperCase()}
           </Badge>
         );
     }

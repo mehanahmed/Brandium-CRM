@@ -65,8 +65,8 @@ import {
   useAddOrderCommentMutation,
   useDeleteOrderCommentMutation,
   type OrderComment,
+  resolveOrderTerms,
 } from "@/lib/orders";
-import { BRANDIUM_TERMS } from "@/components/invoices/torn-paper-terms";
 import { StatusInfoIcon } from "@/components/sales/status-info-icon";
 import { getInitials } from "@/components/orders/assign-stage-dialog";
 import { SalesPdfActions } from "@/components/sales/sales-pdf-actions";
@@ -153,7 +153,7 @@ export default function OrderTrackPage() {
 
   if (isLoading) {
     return (
-      <div className="max-w-4xl mx-auto space-y-6 animate-pulse">
+      <div className="max-w-[210mm] mx-auto space-y-6 animate-pulse">
         <Skeleton className="h-24 rounded-xl" />
         <Skeleton className="h-96 rounded-xl" />
         <Skeleton className="h-48 rounded-xl" />
@@ -397,7 +397,7 @@ export default function OrderTrackPage() {
 
   return (
     <>
-      <main className="max-w-4xl mx-auto space-y-4 sm:space-y-5 pb-6 print:space-y-0">
+      <main className="w-full max-w-[210mm] mx-auto space-y-4 sm:space-y-5 pb-6 print:space-y-0">
         <div className="flex items-center justify-between gap-2 print:hidden">
           <Button asChild variant="ghost" size="sm" className="cursor-pointer">
             <Link href="/orders">
@@ -669,7 +669,7 @@ export default function OrderTrackPage() {
                     <ScrollText className="size-3.5 text-[#67B239]" /> Terms & Conditions
                   </h4>
                   <ol className="list-decimal pl-4 space-y-0.5 text-[11px] leading-snug text-muted-foreground">
-                    {BRANDIUM_TERMS.map((term, index) => (
+                    {resolveOrderTerms(order).map((term, index) => (
                       <li key={index}>{term}</li>
                     ))}
                   </ol>

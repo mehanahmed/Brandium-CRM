@@ -8,18 +8,6 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "10mb",
     },
   },
-  images: {
-    remotePatterns: [
-      {
-        protocol: "http",
-        hostname: "**",
-      },
-      {
-        protocol: "https",
-        hostname: "**",
-      },
-    ],
-  },
   // Uploaded files must never run scripts, whether served from public/ or the route handler.
   async headers() {
     return [

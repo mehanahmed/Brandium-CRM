@@ -761,6 +761,7 @@ export type StageNoteItem = {
   createdAt?: string | null | undefined;
   createdByName?: string | null | undefined;
   createdByAvatar?: string | null | undefined;
+  noteIndex?: number | undefined;
 };
 
 export function parseNotesToItems(
@@ -1100,22 +1101,22 @@ export async function deleteStageHistoryEntry(
 ): Promise<boolean> {
   if (!historyId) return false;
 
-  try {
-    await runMySQLQuery("DELETE FROM `prospect_stage_history` WHERE `id` = ?;", [historyId]);
+  // Throws on failure: this used to swallow errors and report the entry as deleted.
+  await runNoteWrite("DELETE FROM `prospect_stage_history` WHERE `id` = ?;", [historyId]);
 
-    if (prospectId) {
-      const res = await runMySQLQuery<Record<string, unknown>[]>(
-        "SELECT to_stage_id FROM `prospect_stage_history` WHERE `prospect_id` = ? ORDER BY `changed_at` DESC LIMIT 1;",
-        [prospectId],
-      );
-      const latestStageId = String(res.data?.[0]?.["to_stage_id"] || "prospect");
-      await runMySQLQuery(
+  if (prospectId) {
+    const res = await runMySQLQuery<Record<string, unknown>[]>(
+      "SELECT to_stage_id FROM `prospect_stage_history` WHERE `prospect_id` = ? ORDER BY `changed_at` DESC LIMIT 1;",
+      [prospectId],
+    );
+    // No history left (or the read failed): keep the lead's current stage as it is
+    const latestStageId = res.success ? res.data?.[0]?.["to_stage_id"] : null;
+    if (latestStageId) {
+      await runNoteWrite(
         "UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;",
-        [latestStageId, getMySQLTimestamp(), prospectId],
+        [String(latestStageId), getMySQLTimestamp(), prospectId],
       );
     }
-  } catch (err) {
-    console.warn("deleteStageHistoryEntry notice:", err);
   }
 
   return true;

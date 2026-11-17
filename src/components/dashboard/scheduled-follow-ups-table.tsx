@@ -19,9 +19,10 @@ import { parseNotesToItems } from "@/lib/stages";
 import { cn } from "@/lib/utils";
 
 const MAX_ROWS = 5;
-const isClosedStage = (name: string) => /complet|cancel|done|closed/i.test(name);
+// Won, lost, unreachable and denied prospects need no more follow-up
+const CLOSED_GROUPS = new Set(["won", "lost", "unreachable", "denied"]);
 
-/** Dashboard card: open follow-ups (not in a Completed/Canceled column), soonest first. */
+/** Dashboard card: open follow-ups (prospect not in a closed pipeline stage), soonest first. */
 export function ScheduledFollowUpsTable({
   userId,
   isAdmin,
@@ -63,12 +64,13 @@ export function ScheduledFollowUpsTable({
           stageName: stage?.name || item.status,
           // Same colour as this card's column header on the follow-up board
           stageColor: stage?.color || "#64748B",
+          isClosed: CLOSED_GROUPS.has(stage?.group || ""),
           note: parseNotesToItems(item.note).at(-1)?.text || "No note",
           dueTime: Number.isNaN(dueTime) ? 0 : dueTime,
           isOverdue: !Number.isNaN(dueTime) && dueTime < now,
         };
       })
-      .filter((row) => !isClosedStage(row.stageName))
+      .filter((row) => !row.isClosed)
       .sort((a, b) => (sortAsc ? a.dueTime - b.dueTime : b.dueTime - a.dueTime))
       .slice(0, MAX_ROWS);
   }, [items, stages, filterUserId, range?.from, range?.to, sortAsc]);

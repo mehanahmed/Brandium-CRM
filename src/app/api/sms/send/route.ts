@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { logSmsAttempts, normalizeBdPhone, sendViaGateway } from "@/lib/sms-gateway-server";
+import { getRolePermissions } from "@/lib/data-scope-server";
+import { readSession, unauthorized } from "@/lib/session-server";
 
 const sendSchema = z.object({
   phones: z.array(z.string().trim().min(1)).min(1).max(500),
@@ -12,6 +14,16 @@ const sendSchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const session = readSession(req);
+  if (!session) return unauthorized();
+  // Each message costs money: only roles with "Send SMS" may use the gateway
+  if (!session.admin && !(await getRolePermissions(session.role)).has("perm-sms-send")) {
+    return NextResponse.json(
+      { success: false, response: "Your role is not allowed to send SMS." },
+      { status: 403 },
+    );
+  }
+
   const parsed = sendSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json(
@@ -36,7 +48,8 @@ export async function POST(req: Request) {
   const validPhones = phones as string[];
   const result = await sendViaGateway(validPhones, message);
   try {
-    await logSmsAttempts(validPhones, message, result, meta);
+    // The sender is whoever is signed in, not whatever the browser claims
+    await logSmsAttempts(validPhones, message, result, { ...meta, sent_by: session.id });
   } catch (err) {
     console.warn("SMS log write failed:", err);
   }

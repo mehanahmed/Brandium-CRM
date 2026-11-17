@@ -65,7 +65,35 @@ export function AssignStageDialog({
     () => users.filter((u) => !u.is_deleted && (u.status || "Active") !== "Deleted"),
     [users],
   );
+  // People with this stage's short role (e.g. SW for Script Writer) are listed first
+  const stageRole = stage.role?.toUpperCase();
+  const stageTeam = designerReps.filter(
+    (u) => stageRole && (u.role || "").toUpperCase() === stageRole,
+  );
+  const otherUsers = designerReps.filter((u) => !stageTeam.includes(u));
   const selected = designerReps.find((dr) => dr.id === selectedDrId);
+
+  const renderUser = (dr: CrmUser) => (
+    <CommandItem
+      key={dr.id}
+      value={`${dr.name} ${dr.role || ""}`}
+      onSelect={() => {
+        setSelectedDrId(dr.id);
+        setIsPopoverOpen(false);
+      }}
+      className="flex items-center gap-2"
+    >
+      <Check className={cn("h-4 w-4", selectedDrId === dr.id ? "opacity-100" : "opacity-0")} />
+      <Avatar className="h-6 w-6">
+        <AvatarImage src={dr.avatar_url || undefined} alt={dr.name} />
+        <AvatarFallback className="text-xs">{getInitials(dr.name)}</AvatarFallback>
+      </Avatar>
+      <span>{dr.name}</span>
+      <span className="ms-auto rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+        {(dr.role || "").toUpperCase()}
+      </span>
+    </CommandItem>
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,36 +137,22 @@ export function AssignStageDialog({
                     <CommandInput placeholder="Search user..." />
                     <CommandList>
                       <CommandEmpty>No user found.</CommandEmpty>
-                      <CommandGroup>
-                        {designerReps.map((dr) => (
-                          <CommandItem
-                            key={dr.id}
-                            value={dr.name}
-                            onSelect={() => {
-                              setSelectedDrId(dr.id);
-                              setIsPopoverOpen(false);
-                            }}
-                            className="flex items-center gap-2"
-                          >
-                            <Check
-                              className={cn(
-                                "h-4 w-4",
-                                selectedDrId === dr.id ? "opacity-100" : "opacity-0",
-                              )}
-                            />
-                            <Avatar className="h-6 w-6">
-                              <AvatarImage src={dr.avatar_url || undefined} alt={dr.name} />
-                              <AvatarFallback className="text-xs">
-                                {getInitials(dr.name)}
-                              </AvatarFallback>
-                            </Avatar>
-                            <span>{dr.name}</span>
-                            <span className="ms-auto text-xs text-muted-foreground capitalize">
-                              {(dr.role || "").toLowerCase()}
-                            </span>
-                          </CommandItem>
-                        ))}
-                      </CommandGroup>
+                      {stageRole && (
+                        <CommandGroup heading={`${stage.name} (${stageRole})`}>
+                          {stageTeam.length > 0 ? (
+                            stageTeam.map(renderUser)
+                          ) : (
+                            <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                              No user has the {stageRole} role yet. Set it in Users.
+                            </p>
+                          )}
+                        </CommandGroup>
+                      )}
+                      {otherUsers.length > 0 && (
+                        <CommandGroup heading={stageRole ? "Other users" : undefined}>
+                          {otherUsers.map(renderUser)}
+                        </CommandGroup>
+                      )}
                     </CommandList>
                   </Command>
                 </PopoverContent>
