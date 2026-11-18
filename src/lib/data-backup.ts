@@ -80,7 +80,7 @@ export async function fetchBackupSummaryMetrics(): Promise<BackupSummaryMetrics>
 }
 
 /** Tables never exported: they hold login sessions and the SMS gateway API key. */
-export const EXCLUDED_BACKUP_TABLES = ["sessions", "sms_gateway_settings"];
+export const EXCLUDED_BACKUP_TABLES = ["sessions", "sms_gateway_settings", "telegram_settings"];
 
 /** Columns stripped from every exported row (passwords, tokens, keys). */
 const SENSITIVE_COLUMN = /pass(word)?|secret|token|api_key/i;

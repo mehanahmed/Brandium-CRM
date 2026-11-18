@@ -343,6 +343,39 @@ export async function ensureMySQLTablesExist(
       `);
       await conn.query("INSERT IGNORE INTO `sms_gateway_settings` (`id`) VALUES ('default');");
 
+      // `telegram_settings` — single-row Telegram bot config for payment notifications
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS \`telegram_settings\` (
+          \`id\` VARCHAR(36) NOT NULL,
+          \`bot_token\` VARCHAR(255) NULL,
+          \`chat_ids\` TEXT NULL,
+          \`app_url\` VARCHAR(500) NULL,
+          \`is_enabled\` TINYINT(1) NOT NULL DEFAULT 0,
+          \`notify_payment_add\` TINYINT(1) NOT NULL DEFAULT 1,
+          \`notify_payment_adjust\` TINYINT(1) NOT NULL DEFAULT 1,
+          \`updated_by\` VARCHAR(36) NULL,
+          \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (\`id\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+      await conn.query("INSERT IGNORE INTO `telegram_settings` (`id`) VALUES ('default');");
+
+      // `telegram_payment_notices` — one row per payment sent to Telegram (the key stops repeats)
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS \`telegram_payment_notices\` (
+          \`payment_id\` VARCHAR(64) NOT NULL,
+          \`order_id\` VARCHAR(36) NOT NULL,
+          \`order_number\` VARCHAR(50) NULL,
+          \`kind\` VARCHAR(20) NOT NULL,
+          \`amount\` DECIMAL(14,2) NOT NULL DEFAULT 0,
+          \`status\` VARCHAR(20) NOT NULL,
+          \`response\` TEXT NULL,
+          \`created_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (\`payment_id\`),
+          KEY \`idx_tg_notice_created\` (\`created_at\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+
       // `sms_logs` — one row per SMS attempt, written by the server after the gateway replies
       await conn.query(`
         CREATE TABLE IF NOT EXISTS \`sms_logs\` (
@@ -925,6 +958,7 @@ export async function ensureMySQLTablesExist(
           ('perm-admin-users', 'users', 'admin', 'Manage user accounts and credentials'),
           ('perm-admin-roles', 'roles', 'admin', 'Manage system roles and permissions'),
           ('perm-admin-sms-gateway', 'sms_gateway', 'admin', 'Configure SMS Gateway settings'),
+          ('perm-admin-notifications', 'notifications', 'admin', 'Configure Telegram notifications'),
           ('perm-admin-backup', 'backup', 'admin', 'Manage database backups and exports')
         ON DUPLICATE KEY UPDATE \`description\` = VALUES(\`description\`), \`resource\` = VALUES(\`resource\`), \`action\` = VALUES(\`action\`);
       `);
@@ -971,6 +1005,7 @@ export async function ensureMySQLTablesExist(
           ('role-global-admin', 'perm-admin-users'),
           ('role-global-admin', 'perm-admin-roles'),
           ('role-global-admin', 'perm-admin-sms-gateway'),
+          ('role-global-admin', 'perm-admin-notifications'),
           ('role-global-admin', 'perm-admin-backup'),
 
           ('role-global-agent', 'perm-prospects-read'),

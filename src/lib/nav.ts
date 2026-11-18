@@ -5,6 +5,7 @@ import {
   MessageSquarePlus,
   MessagesSquare,
   RadioTower,
+  BellRing,
   ReceiptText,
   Activity,
   UserCog,
@@ -107,6 +108,12 @@ export const navGroups: NavGroup[] = [
         url: "/admin/sms-gateway",
         icon: RadioTower,
         permission: "perm-admin-sms-gateway",
+      },
+      {
+        title: "Notifications",
+        url: "/admin/notifications",
+        icon: BellRing,
+        permission: "perm-admin-notifications",
       },
       {
         title: "Agent Reports",

@@ -652,6 +652,18 @@ const invalidateOrders = (queryClient: ReturnType<typeof useQueryClient>) => {
   queryClient.invalidateQueries({ queryKey: ["order-detail"] });
 };
 
+/** Telegram notice for payments added in this save. The server builds the text from the saved
+ * order and sends each payment once; a failure never blocks or undoes the save. */
+function notifyNewPayments(orderId: string, payments: AdvancePaymentRecord[]) {
+  const paymentIds = payments.map((p) => String(p.id)).filter(Boolean);
+  if (paymentIds.length === 0) return;
+  void fetch("/api/telegram/payments", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ orderId, paymentIds }),
+  }).catch(() => undefined);
+}
+
 export function useSaveOrderMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -679,6 +691,16 @@ export function useSaveOrderMutation() {
       ];
 
       if (payload.id) {
+        // Payment ids already saved, so only payments added in this edit go to Telegram
+        const before = await runMySQLQuery<Record<string, unknown>[]>(
+          "SELECT payments_json FROM orders WHERE id = ? LIMIT 1;",
+          [payload.id],
+        );
+        const savedIds = new Set(
+          parseJsonArray<{ id?: string }>(before.data?.[0]?.["payments_json"]).map((p) =>
+            String(p.id),
+          ),
+        );
         // payments_json and items_json are whole-value overwrites, so a stale form must not win.
         // shortcut: updated_at has 1-second precision; two saves in the same second can still
         // overwrite each other. Add a version counter column if that ever matters.
@@ -699,6 +721,13 @@ export function useSaveOrderMutation() {
           ],
         );
         if (changed === 0) throw new Error(STALE_ORDER_MESSAGE);
+        // Without the earlier list every old payment would look new, so then send nothing
+        if (before.success) {
+          notifyNewPayments(
+            payload.id,
+            payload.advance_payments.filter((p) => !savedIds.has(String(p.id))),
+          );
+        }
         return { id: payload.id, order_number: null as string | null };
       }
 
@@ -729,6 +758,7 @@ export function useSaveOrderMutation() {
           id,
         ]);
       }
+      notifyNewPayments(id, payload.advance_payments);
       return { id, order_number: orderNumber };
     },
     onSuccess: (_, variables) => {
