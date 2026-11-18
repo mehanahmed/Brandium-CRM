@@ -33,8 +33,17 @@ export async function getMySQLPool(): Promise<mysql.Pool> {
   });
 
   try {
-    globalPool.on("connection", (connection) => {
-      connection.query("SET time_zone = '+06:00';");
+    // mysql2 forwards the raw callback connection here, whatever the promise typings say
+    globalPool.on("connection", (promiseTyped) => {
+      const connection = promiseTyped as unknown as {
+        query: (sql: string, callback: () => void) => void;
+      };
+      connection.query("SET time_zone = '+06:00';", () => undefined);
+      // A query may not hold a connection forever (`SELECT SLEEP(86400)` from any user used to
+      // tie up the whole pool). MariaDB: seconds, all statements; MySQL 8: ms, SELECT only.
+      // The one the server does not know fails and is ignored.
+      connection.query("SET SESSION max_statement_time = 60;", () => undefined);
+      connection.query("SET SESSION max_execution_time = 60000;", () => undefined);
     });
   } catch {
     // Ignore

@@ -1,7 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 import { formatStageSlugOrName, parseNotesToItems, type StageNoteItem } from "@/lib/stages";
-import { runMySQLQuery } from "@/lib/mysql-api";
+import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "@/lib/mysql-api";
 import { getMySQLTimestamp } from "@/lib/mysql-client";
 import { PROSPECT_IDS_SQL, PROSPECT_PHONE_MATCH_SQL } from "@/lib/trusted-sql";
 
@@ -739,7 +739,7 @@ export async function createProspect(input: CreateProspectInput): Promise<Prospe
 export async function deleteProspect(prospectId: string): Promise<boolean> {
   if (!prospectId) return false;
 
-  await runMySQLQuery("DELETE FROM `prospects` WHERE `id` = ?", [prospectId]);
+  await runMySQLWriteOne("DELETE FROM `prospects` WHERE `id` = ?", [prospectId]);
   return true;
 }
 
@@ -801,7 +801,7 @@ export async function updateProspect(
     prospectId,
   ];
 
-  await runMySQLQuery(updateSql, updateParams);
+  await runMySQLWrite(updateSql, updateParams);
   return true;
 }
 
@@ -809,9 +809,6 @@ export type DuplicatePhoneMatch = {
   isDuplicate: boolean;
   match?: {
     id: string;
-    contact_name: string;
-    business_name: string | null;
-    phone: string;
     stage_name: string;
     assigned_agent_name: string;
     created_at: string;
@@ -845,9 +842,6 @@ export async function checkDuplicateProspectPhone(
           isDuplicate: true,
           match: {
             id: String(match["id"]),
-            contact_name: String(match["contact_name"] || "Unknown"),
-            business_name: (match["business_name"] as string) || null,
-            phone: String(match["phone"] || match["alternative_phone"] || ""),
             stage_name: String(match["stage_name"] || "Prospect"),
             assigned_agent_name: String(match["assigned_agent_name"] || "Unassigned"),
             created_at: String(match["created_at"] || ""),

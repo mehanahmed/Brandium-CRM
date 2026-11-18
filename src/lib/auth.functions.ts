@@ -5,9 +5,17 @@ import mysql from "mysql2/promise";
 import { getMySQLConfig, getMySQLTimestamp } from "./mysql-client";
 import { MATRIX_EXTRA_PERMISSIONS } from "./permission-matrix";
 
-// In-Memory Schema Bootstrapping Cache & Concurrency Latch
-let isSchemaInitialized = false;
-let initSchemaPromise: Promise<void> | null = null;
+// Schema bootstrap latch. On globalThis: `next dev` loads this module once per route bundle,
+// and a plain module variable re-ran the whole DDL in each one.
+type SchemaLatch = { done: boolean; running: Promise<void> | null; failedAt: number };
+const latchStore = globalThis as typeof globalThis & { __brandiumSchemaLatch?: SchemaLatch };
+const latch: SchemaLatch = (latchStore.__brandiumSchemaLatch ??= {
+  done: false,
+  running: null,
+  failedAt: 0,
+});
+// After a failed bootstrap, requests skip it for a minute instead of re-running all DDL each time
+const RETRY_AFTER_MS = 60_000;
 
 /**
  * ERP-Style Enterprise Automatic Database Schema Bootstrapper.
@@ -17,22 +25,23 @@ export async function ensureMySQLTablesExist(
   conn: mysql.Connection,
   dbName?: string,
 ): Promise<void> {
-  if (isSchemaInitialized) {
-    return;
-  }
+  if (latch.done) return;
+  if (latch.running) return latch.running;
+  if (Date.now() - latch.failedAt < RETRY_AFTER_MS) return;
 
-  if (initSchemaPromise) {
-    return initSchemaPromise;
-  }
-
-  initSchemaPromise = (async () => {
+  latch.running = (async () => {
     const targetDb = dbName || getMySQLConfig().database;
     try {
       // Disable foreign key checks for safe table bootstrapping
       await conn.query("SET FOREIGN_KEY_CHECKS = 0;");
-      await conn.query(
-        `ALTER DATABASE \`${targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
-      );
+      // Hosted MySQL users often lack ALTER on the database; tables still get utf8mb4 below
+      try {
+        await conn.query(
+          `ALTER DATABASE \`${targetDb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`,
+        );
+      } catch (err) {
+        console.warn("Could not set the database charset (continuing):", err);
+      }
 
       // Auto-delete \`user_avatars\` table if it exists in MySQL
       try {
@@ -731,6 +740,8 @@ export async function ensureMySQLTablesExist(
         // orders
         { table: "orders", column: "job_id", def: "VARCHAR(100) NULL" },
         { table: "orders", column: "terms", def: "LONGTEXT NULL" },
+        { table: "orders", column: "brief", def: "LONGTEXT NULL" },
+        { table: "orders", column: "stage_briefs", def: "LONGTEXT NULL" },
         {
           table: "order_stage_positions",
           column: "is_hidden",
@@ -1325,11 +1336,12 @@ export async function ensureMySQLTablesExist(
       }
 
       // Mark as initialized in memory for lightning fast 0ms subsequent queries
-      isSchemaInitialized = true;
+      latch.done = true;
     } catch (e) {
       console.error("ERP Auto Database Init Error:", e);
-      initSchemaPromise = null;
+      latch.failedAt = Date.now();
     } finally {
+      latch.running = null;
       try {
         await conn.query("SET FOREIGN_KEY_CHECKS = 1;");
       } catch {
@@ -1338,5 +1350,5 @@ export async function ensureMySQLTablesExist(
     }
   })();
 
-  return initSchemaPromise;
+  return latch.running;
 }

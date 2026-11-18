@@ -68,14 +68,17 @@ import {
   useOrderStageSettings,
   ordersQueryOptions,
   requiresStatusReason,
+  requiresStageLink,
   resolveOrderStatus,
   useAssignStageMutation,
   useUpdateOrderStatusMutation,
   type CrmOrder,
 } from "@/lib/orders";
 import { DateRangePicker3 } from "@/components/dashboard/date-range-picker3";
-import { AssignStageDialog, getInitials } from "@/components/orders/assign-stage-dialog";
+import { getInitials } from "@/components/orders/assign-stage-dialog";
+import { StageAssignFlow } from "@/components/orders/stage-assign-flow";
 import { StatusReasonDialog } from "@/components/orders/status-reason-dialog";
+import { FootageLinkDialog } from "@/components/orders/footage-link-dialog";
 import { KanbanColumn } from "./kanban-column";
 import { ProjectCard } from "./project-card";
 import { getStageStartedAt } from "@/lib/orders";
@@ -265,7 +268,7 @@ export function ProjectsKanbanBoard() {
       setStageAssign({ order, statusId });
       return;
     }
-    if (requiresStatusReason(statusId)) {
+    if (requiresStatusReason(statusId) || requiresStageLink(statusId)) {
       setReasonTarget({ order, statusId });
       return;
     }
@@ -513,7 +516,22 @@ export function ProjectsKanbanBoard() {
         </DragOverlay>
       </DndContext>
 
-      {reasonTarget && (
+      {reasonTarget && requiresStageLink(reasonTarget.statusId) && (
+        <FootageLinkDialog
+          key={`${reasonTarget.order.id}-${reasonTarget.statusId}`}
+          order={reasonTarget.order}
+          statusId={reasonTarget.statusId}
+          isSaving={updateStatusMutation.isPending}
+          onCancel={() => setReasonTarget(null)}
+          onConfirm={(link) =>
+            updateStatusMutation.mutate(
+              { ...reasonTarget, changedByName, link },
+              { onSuccess: () => setReasonTarget(null) },
+            )
+          }
+        />
+      )}
+      {reasonTarget && !requiresStageLink(reasonTarget.statusId) && (
         <StatusReasonDialog
           key={`${reasonTarget.order.id}-${reasonTarget.statusId}`}
           order={reasonTarget.order}
@@ -530,20 +548,21 @@ export function ProjectsKanbanBoard() {
       )}
 
       {stageAssign && (
-        <AssignStageDialog
+        <StageAssignFlow
           key={`${stageAssign.order.id}-${stageAssign.statusId}`}
           open
           onOpenChange={(open) => !open && setStageAssign(null)}
           order={stageAssign.order}
           statusId={stageAssign.statusId}
           users={users}
-          onAssign={async (assignee) => {
+          onAssign={async (assignee, deadline) => {
             await assignStageMutation.mutateAsync({
               order: stageAssign.order,
               statusId: stageAssign.statusId,
               assigneeId: assignee.id,
               assigneeName: assignee.name,
               changedByName,
+              deadline,
             });
             setStageAssign(null);
           }}

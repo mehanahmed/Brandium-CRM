@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runMySQLQuery } from "@/lib/mysql-api";
+import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "@/lib/mysql-api";
 import { generateUUID, getMySQLTimestamp } from "@/lib/mysql-client";
 
 export type Expense = {
@@ -261,7 +261,7 @@ export function useAddExpenseMutation() {
         now,
       ];
 
-      await runMySQLQuery(sql, params);
+      await runMySQLWrite(sql, params);
       return { id };
     },
     onSuccess: () => {
@@ -322,7 +322,7 @@ export function useUpdateExpenseMutation() {
         payload.id,
       ];
 
-      await runMySQLQuery(sql, params);
+      await runMySQLWrite(sql, params);
       return { success: true };
     },
     onSuccess: () => {
@@ -342,7 +342,7 @@ export function useDeleteExpenseMutation() {
   return useMutation({
     mutationFn: async (id: string) => {
       const sql = "DELETE FROM `expenses` WHERE `id` = ?";
-      await runMySQLQuery(sql, [id]);
+      await runMySQLWriteOne(sql, [id]);
       return { id };
     },
     onSuccess: () => {

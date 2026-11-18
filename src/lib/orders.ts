@@ -1,8 +1,8 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { toast } from "sonner";
-import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
-import { generateUUID } from "./mysql-client";
+import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "./mysql-api";
+import { generateUUID, getMySQLTimestamp } from "./mysql-client";
 import { ORDER_INSERT_SQL } from "./trusted-sql";
 import type { AdvancePaymentRecord } from "./projects";
 import { parseTerms, resolveTerms } from "@/components/sales/terms-editor";
@@ -20,6 +20,216 @@ export type OrderStatus = {
 };
 
 export const ORDER_SUBMITTED_STATUS_ID = "order-submitted";
+
+/** Brief the Content Planner needs; every field is text, stored as JSON in `orders.brief`. */
+export type ContentPlannerBrief = {
+  driveLink: string;
+  reference: string;
+  modelArtistNames: string;
+  location: string;
+  shootingBrief: string;
+  aspectRatio: string;
+  specialNotes: string;
+};
+
+export const EMPTY_CONTENT_PLANNER_BRIEF: ContentPlannerBrief = {
+  driveLink: "",
+  reference: "",
+  modelArtistNames: "",
+  location: "",
+  shootingBrief: "",
+  aspectRatio: "",
+  specialNotes: "",
+};
+
+/** Reads `orders.brief` (JSON text or an object); anything malformed reads as no brief. */
+export function parseContentPlannerBrief(value: unknown): ContentPlannerBrief | null {
+  let data: unknown = value;
+  if (typeof value === "string") {
+    if (!value.trim()) return null;
+    try {
+      data = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  const pick = (key: keyof ContentPlannerBrief) => String(record[key] ?? "");
+  return {
+    driveLink: pick("driveLink"),
+    reference: pick("reference"),
+    modelArtistNames: pick("modelArtistNames"),
+    location: pick("location"),
+    shootingBrief: pick("shootingBrief"),
+    aspectRatio: pick("aspectRatio"),
+    specialNotes: pick("specialNotes"),
+  };
+}
+
+/** Saves the Content Planner brief on the order (only the `brief` column changes). */
+export async function saveOrderBrief(orderId: string, brief: ContentPlannerBrief): Promise<void> {
+  await runMySQLWrite("UPDATE orders SET brief = ? WHERE id = ?;", [
+    JSON.stringify(brief),
+    orderId,
+  ]);
+}
+
+/** Script Writer requirements (Facebook / video ratio / model / product / CTA ...). Text fields are
+ * plain strings; `brandLogoUrl` is an uploaded image link, never inline base64. */
+export type ScriptWriterRequirements = {
+  facebookPageLink: string;
+  websiteLink: string;
+  competitorReferences: string;
+  brandLogoUrl: string;
+  videoRatio: string;
+  modelRestrictions: string;
+  productDetails: string;
+  keyPoints: string;
+  painPoints: string;
+  targetAudience: string;
+  messageDelivery: string;
+  callToAction: string;
+  importantNotes: string;
+};
+
+export const EMPTY_SCRIPT_WRITER_REQUIREMENTS: ScriptWriterRequirements = {
+  facebookPageLink: "",
+  websiteLink: "",
+  competitorReferences: "",
+  brandLogoUrl: "",
+  videoRatio: "",
+  modelRestrictions: "",
+  productDetails: "",
+  keyPoints: "",
+  painPoints: "",
+  targetAudience: "",
+  messageDelivery: "",
+  callToAction: "",
+  importantNotes: "",
+};
+
+/** Reads `orders.stage_briefs.scriptWriter`; malformed JSON reads as no requirements. */
+export function parseScriptWriterRequirements(value: unknown): ScriptWriterRequirements | null {
+  let data: unknown = value;
+  if (typeof value === "string") {
+    if (!value.trim()) return null;
+    try {
+      data = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!data || typeof data !== "object") return null;
+  const inner = (data as Record<string, unknown>)["scriptWriter"];
+  if (!inner || typeof inner !== "object") return null;
+  const record = inner as Record<string, unknown>;
+  const out = { ...EMPTY_SCRIPT_WRITER_REQUIREMENTS } as Record<
+    keyof ScriptWriterRequirements,
+    string
+  >;
+  for (const key of Object.keys(out) as (keyof ScriptWriterRequirements)[]) {
+    out[key] = String(record[key] ?? "");
+  }
+  return out;
+}
+
+/** Reads every stage brief in `orders.stage_briefs`: { key: { field: text } }. */
+export function parseAllStageBriefs(value: unknown): Record<string, Record<string, string>> | null {
+  let data: unknown = value;
+  if (typeof value === "string") {
+    if (!value.trim()) return null;
+    try {
+      data = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!data || typeof data !== "object") return null;
+  const out: Record<string, Record<string, string>> = {};
+  for (const [key, inner] of Object.entries(data as Record<string, unknown>)) {
+    if (!inner || typeof inner !== "object") continue;
+    const fields: Record<string, string> = {};
+    for (const [field, text] of Object.entries(inner as Record<string, unknown>)) {
+      fields[field] = String(text ?? "");
+    }
+    out[key] = fields;
+  }
+  return out;
+}
+
+/** Saves one stage brief under `stage_briefs.<key>`, keeping the other briefs on the order. */
+export async function saveStageBrief(
+  orderId: string,
+  key: string,
+  values: Record<string, string>,
+): Promise<void> {
+  await runMySQLWrite(
+    "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?) WHERE id = ?;",
+    [JSON.stringify({ [key]: values }), orderId],
+  );
+}
+
+/** Videographer shooting brief, stored under `stage_briefs.videographer`. */
+export type VideographerBrief = {
+  scriptForDirector: string;
+  cameraSetup: string;
+  shootingLocation: string;
+  artistTalent: string;
+  specialNotes: string;
+};
+
+export const EMPTY_VIDEOGRAPHER_BRIEF: VideographerBrief = {
+  scriptForDirector: "",
+  cameraSetup: "",
+  shootingLocation: "",
+  artistTalent: "",
+  specialNotes: "",
+};
+
+/** Reads `orders.stage_briefs.videographer`; malformed JSON reads as no brief. */
+export function parseVideographerBrief(value: unknown): VideographerBrief | null {
+  let data: unknown = value;
+  if (typeof value === "string") {
+    if (!value.trim()) return null;
+    try {
+      data = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!data || typeof data !== "object") return null;
+  const inner = (data as Record<string, unknown>)["videographer"];
+  if (!inner || typeof inner !== "object") return null;
+  const record = inner as Record<string, unknown>;
+  const out = { ...EMPTY_VIDEOGRAPHER_BRIEF } as Record<keyof VideographerBrief, string>;
+  for (const key of Object.keys(out) as (keyof VideographerBrief)[]) {
+    out[key] = String(record[key] ?? "");
+  }
+  return out;
+}
+
+/** Saves the Videographer brief under `stage_briefs.videographer`, keeping other stage briefs. */
+export async function saveVideographerBrief(
+  orderId: string,
+  brief: VideographerBrief,
+): Promise<void> {
+  await runMySQLWrite(
+    "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?) WHERE id = ?;",
+    [JSON.stringify({ videographer: brief }), orderId],
+  );
+}
+
+/** Saves Script Writer requirements under `stage_briefs.scriptWriter`, keeping other stage briefs. */
+export async function saveScriptWriterRequirements(
+  orderId: string,
+  requirements: ScriptWriterRequirements,
+): Promise<void> {
+  await runMySQLWrite(
+    "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?) WHERE id = ?;",
+    [JSON.stringify({ scriptWriter: requirements }), orderId],
+  );
+}
 
 /** Brandium production workflow, ids stored in `orders.status`. */
 export const ORDER_STATUSES: OrderStatus[] = [
@@ -106,11 +316,6 @@ export async function saveOrderStageSettings(
   }
 }
 
-/** Stages that run on the clock; Delivered has no SLA. */
-export const SLA_STAGES = ORDER_STATUSES.filter((s) => s.id !== "delivered");
-/** Default per-stage SLA when the order has no delivery date. */
-export const DEFAULT_STAGE_SLA_HOURS = 48;
-
 /** When the order entered its current stage (latest matching history entry). */
 export const getStageStartedAt = (order: CrmOrder): string => {
   const current = resolveOrderStatus(order.status).id;
@@ -121,30 +326,36 @@ export const getStageStartedAt = (order: CrmOrder): string => {
 };
 
 /**
- * ERPAPP stage SLA: with a delivery date the time is split evenly across the working stages;
- * otherwise each stage gets DEFAULT_STAGE_SLA_HOURS. Null for Delivered.
+ * Stage deadline, only when one was set in the assign dialog (stored on the stage's history entry).
+ * No deadline means no progress bar. Null for Delivered.
  */
 export const getStageDeadline = (
   order: CrmOrder,
-): { start: Date; target: Date; slaHours: number } | null => {
-  if (resolveOrderStatus(order.status).id === "delivered") return null;
-  const start = new Date(getStageStartedAt(order));
-  if (order.delivery_date) {
-    const projectStart = new Date(order.created_at).getTime();
-    const projectEnd = new Date(order.delivery_date).getTime();
-    const totalDays = Math.max(1, (projectEnd - projectStart) / 86400000);
-    const allocatedDays = totalDays / SLA_STAGES.length;
-    return {
-      start,
-      target: new Date(start.getTime() + Math.round(allocatedDays * 86400000)),
-      slaHours: Math.max(1, Math.round(allocatedDays * 24)),
-    };
-  }
+): { start: Date; target: Date; slaMinutes: number } | null => {
+  const current = resolveOrderStatus(order.status).id;
+  if (current === "delivered") return null;
+  const entry = [...order.status_history]
+    .reverse()
+    .find((h) => resolveOrderStatus(h.status).id === current);
+  if (!entry?.deadline) return null;
+  const target = new Date(entry.deadline);
+  const start = new Date(entry.timestamp);
+  if (Number.isNaN(target.getTime()) || Number.isNaN(start.getTime())) return null;
   return {
     start,
-    target: new Date(start.getTime() + DEFAULT_STAGE_SLA_HOURS * 3600000),
-    slaHours: DEFAULT_STAGE_SLA_HOURS,
+    target,
+    slaMinutes: Math.max(1, Math.round((target.getTime() - start.getTime()) / 60000)),
   };
+};
+
+/**
+ * Production roles are the stage role codes (SW, CP, VG, VE, MK, DEV). Matching is case-insensitive
+ * because users.role is stored as typed. Admins and agents are never production roles.
+ */
+export const isProductionRole = (role?: string | null): boolean => {
+  const code = (role || "").trim().toUpperCase();
+  if (!code) return false;
+  return ORDER_STATUSES.some((s) => s.role && s.role.toUpperCase() === code);
 };
 
 /** Earlier ERPAPP status ids that may still be stored on older orders (display only). */
@@ -191,6 +402,10 @@ export interface OrderStatusHistoryEntry {
   timestamp: string;
   changedByUserName: string;
   notes?: string | null | undefined;
+  /** Optional ISO deadline for this stage, set in the assign dialog. */
+  deadline?: string | null | undefined;
+  /** User assigned to this stage by this entry; older entries only name them in `notes`. */
+  assignedToUserId?: string | null | undefined;
 }
 
 export interface CrmOrder {
@@ -220,6 +435,14 @@ export interface CrmOrder {
   notes: string | null;
   /** This order's own Terms & Conditions; null means the default `BRANDIUM_TERMS`. */
   terms: string[] | null;
+  /** Shooting brief filled before a Content Planner is assigned; null until then. */
+  brief: ContentPlannerBrief | null;
+  /** Requirements filled before a Script Writer is assigned; null until then. */
+  script_writer_brief: ScriptWriterRequirements | null;
+  /** Videographer shooting brief filled before a Videographer is assigned; null until then. */
+  videographer_brief: VideographerBrief | null;
+  /** Every stage brief on the order, keyed by brief key (see components/orders/stage-brief-config.ts). */
+  stage_briefs: Record<string, Record<string, string>> | null;
   order_date: string | null;
   delivery_date: string | null;
   created_at: string;
@@ -248,7 +471,7 @@ const parseJsonArray = <T>(raw: unknown): T[] => {
   }
 };
 
-const ORDER_SELECT_SQL = `
+export const ORDER_SELECT_SQL = `
   SELECT
     o.*,
     COALESCE(prof_c.full_name, u_c.name) AS crm_user_name,
@@ -321,6 +544,10 @@ function mapOrderRow(r: Record<string, unknown>): CrmOrder {
     is_starred: Number(r["is_starred"] || 0),
     notes: (r["notes"] as string) || null,
     terms: parseTerms(r["terms"]),
+    brief: parseContentPlannerBrief(r["brief"]),
+    script_writer_brief: parseScriptWriterRequirements(r["stage_briefs"]),
+    videographer_brief: parseVideographerBrief(r["stage_briefs"]),
+    stage_briefs: parseAllStageBriefs(r["stage_briefs"]),
     order_date: (r["order_date"] as string) || null,
     delivery_date: (r["delivery_date"] as string) || null,
     created_at: String(r["order_date"] || r["created_at"] || new Date().toISOString()),
@@ -352,6 +579,21 @@ export const orderDetailQueryOptions = (orderRef: string) =>
       );
       const row = res.data?.[0];
       return row ? mapOrderRow(row) : null;
+    },
+    enabled: Boolean(orderRef),
+  });
+
+/** Public track page: order from the server route that strips staff-only fields. */
+export const publicOrderQueryOptions = (orderRef: string) =>
+  queryOptions({
+    queryKey: ["order-detail", orderRef],
+    queryFn: async (): Promise<CrmOrder | null> => {
+      const res = await fetch(`/api/public/track/${encodeURIComponent(orderRef)}`, {
+        cache: "no-store",
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("Could not load this order");
+      return mapOrderRow((await res.json()) as Record<string, unknown>);
     },
     enabled: Boolean(orderRef),
   });
@@ -508,6 +750,7 @@ async function writeStatusChange(
   changedByName: string,
   notes: string,
   designerId?: string,
+  deadline?: string | null,
 ) {
   const history: OrderStatusHistoryEntry[] = [
     ...order.status_history,
@@ -517,6 +760,8 @@ async function writeStatusChange(
       timestamp: new Date().toISOString(),
       changedByUserName: changedByName,
       notes,
+      deadline: deadline ?? null,
+      assignedToUserId: designerId ?? null,
     },
   ];
   // status_history is rebuilt from the loaded copy, so refuse if the row changed since
@@ -534,6 +779,25 @@ const REASON_REQUIRED_STATUS_IDS = new Set(["canceled", "on-hold"]);
 export const requiresStatusReason = (statusId: string) =>
   REASON_REQUIRED_STATUS_IDS.has(resolveOrderStatus(statusId).id);
 
+/** Stage that needs the footage Drive link before the order moves into it. */
+export const FOOTAGE_STAGE_ID = "video-graphy-complete";
+
+export const requiresStageLink = (statusId: string) =>
+  resolveOrderStatus(statusId).id === FOOTAGE_STAGE_ID;
+
+/** Trims a link, adds https:// when missing, and returns null unless it has a real host. */
+export function normalizeStageLink(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withScheme);
+    return url.hostname.includes(".") ? withScheme : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useUpdateOrderStatusMutation() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -543,20 +807,26 @@ export function useUpdateOrderStatusMutation() {
       changedByName: string;
       /** Required for Canceled / On Hold (`requiresStatusReason`). */
       reason?: string | undefined;
+      /** Footage Drive link, required for Video Graphy Complete (`requiresStageLink`). */
+      link?: string | undefined;
     }) => {
       const status = resolveOrderStatus(p.statusId);
       const reason = p.reason?.trim() || "";
       if (requiresStatusReason(p.statusId) && !reason) {
         throw new Error(`A reason is required to move an order to "${status.name}".`);
       }
-      await writeStatusChange(
-        p.order,
-        p.statusId,
-        p.changedByName,
-        reason
-          ? `Order moved to "${status.name}". Reason: ${reason}`
-          : `Order moved to "${status.name}".`,
-      );
+      let note = reason
+        ? `Order moved to "${status.name}". Reason: ${reason}`
+        : `Order moved to "${status.name}".`;
+      if (requiresStageLink(p.statusId)) {
+        const url = normalizeStageLink(p.link ?? "");
+        if (!url) {
+          throw new Error("A valid Drive link is required for Video Graphy Complete.");
+        }
+        // Read back by the project details popup ("Link: <url>" in the move note)
+        note = `Order moved to "${status.name}". Link: ${url}`;
+      }
+      await writeStatusChange(p.order, p.statusId, p.changedByName, note);
     },
     onSuccess: (_, p) => {
       invalidateOrders(queryClient);
@@ -576,6 +846,8 @@ export function useAssignStageMutation() {
       assigneeId: string;
       assigneeName: string;
       changedByName: string;
+      /** Optional ISO deadline for the stage; null or missing means no progress bar. */
+      deadline?: string | null;
     }) => {
       const stage = resolveOrderStatus(p.statusId);
       await writeStatusChange(
@@ -584,6 +856,7 @@ export function useAssignStageMutation() {
         p.changedByName,
         `Order moved to "${stage.name}" and assigned to ${p.assigneeName}.`,
         p.assigneeId,
+        p.deadline ?? null,
       );
     },
     onSuccess: (_, p) => {
@@ -600,7 +873,7 @@ export function useDeleteOrderMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (order: CrmOrder) => {
-      await runMySQLQuery("UPDATE orders SET is_deleted = 1 WHERE id = ?;", [order.id]);
+      await runMySQLWriteOne("UPDATE orders SET is_deleted = 1 WHERE id = ?;", [order.id]);
     },
     onSuccess: (_, order) => {
       invalidateOrders(queryClient);
@@ -616,7 +889,7 @@ export function useAddOrderCommentMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (p: Omit<OrderComment, "id" | "created_at">) => {
-      await runMySQLQuery(
+      await runMySQLWrite(
         "INSERT INTO order_comments (id, order_id, parent_id, user_id, user_name, user_role, text) VALUES (?, ?, ?, ?, ?, ?, ?);",
         [generateUUID(), p.order_id, p.parent_id, p.user_id, p.user_name, p.user_role, p.text],
       );
@@ -632,7 +905,7 @@ export function useDeleteOrderCommentMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (comment: OrderComment) => {
-      await runMySQLQuery("DELETE FROM order_comments WHERE id = ? OR parent_id = ?;", [
+      await runMySQLWriteOne("DELETE FROM order_comments WHERE id = ? OR parent_id = ?;", [
         comment.id,
         comment.id,
       ]);

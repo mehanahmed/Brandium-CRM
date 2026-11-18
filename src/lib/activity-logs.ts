@@ -83,6 +83,8 @@ export type ActivityLogFilters = {
   /** `yyyy-MM-dd`, inclusive; compared with each event's own date. */
   from?: string | undefined;
   to?: string | undefined;
+  /** Throw when any source query fails, instead of returning the rows that did load. */
+  strict?: boolean | undefined;
 };
 
 // shortcut: each source reads at most this many rows in the range; add paging if a range ever exceeds it
@@ -134,10 +136,11 @@ const parseJsonArray = (value: unknown): Record<string, unknown>[] => {
 const normalizeEntityType = (value: string) =>
   /^follow[-_\s]?ups?(_|$)/i.test(value) ? "followup" : value || "general";
 
-const query = async (label: string, sql: string, params: unknown[]) => {
+const query = async (failures: string[], label: string, sql: string, params: unknown[]) => {
   const res = await runMySQLQuery<Record<string, unknown>[]>(sql, params);
   if (!res.success) {
     console.warn(`fetchActivityLogs ${label} query error:`, res.error);
+    failures.push(label);
     return [];
   }
   return Array.isArray(res.data) ? res.data : [];
@@ -151,6 +154,7 @@ const prospectMeta = (r: Record<string, unknown>) => ({
 
 export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promise<ActivityLog[]> {
   const allLogs: ActivityLog[] = [];
+  const failures: string[] = [];
   const add = (log: ActivityLog) => {
     if (log.created_at && inRange(log.created_at, filters)) allLogs.push(log);
   };
@@ -159,6 +163,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("a.created_at", filters);
     const rows = await query(
+      failures,
       "activities",
       `SELECT a.id, a.actor_id AS user_id, ${actorName("act")} AS user_name,
               COALESCE(a.message, a.activity_type) AS action, a.activity_type,
@@ -193,6 +198,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("sh.changed_at", filters);
     const rows = await query(
+      failures,
       "stage history",
       `SELECT sh.id, sh.changed_by AS user_id, ${actorName("sh")} AS user_name,
               COALESCE(s_to.name, sh.to_stage_id) AS to_stage_name,
@@ -239,6 +245,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("m.created_at", filters);
     const rows = await query(
+      failures,
       "meetings",
       `SELECT m.id, COALESCE(m.created_by, m.assigned_user_id) AS user_id, ${actorName("mt")} AS user_name,
               m.title, m.status AS meeting_status, m.meeting_type, m.meeting_date, m.meeting_time,
@@ -277,6 +284,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   // No date filter in SQL: an old order can get a new payment or status today.
   {
     const rows = await query(
+      failures,
       "orders",
       `SELECT o.id, o.order_number, o.job_id, o.company_name, o.client_name, o.phone,
               o.prospect_id, o.crm_user_id, ${actorName("ord")} AS crm_user_name,
@@ -363,6 +371,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("q.created_at", filters);
     const rows = await query(
+      failures,
       "quotations",
       `SELECT q.id, q.quotation_code, q.title, q.client_name, q.client_phone, q.status, q.budget,
               q.prospect_id, q.created_by AS user_id, ${actorName("qt")} AS user_name, q.created_at
@@ -396,6 +405,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("s.created_at", filters);
     const rows = await query(
+      failures,
       "sms",
       `SELECT s.id, s.recipient_phone, s.recipient_name, s.prospect_id, s.message, s.status, s.mode,
               s.sent_by AS user_id, ${actorName("sms")} AS user_name, s.created_at
@@ -429,6 +439,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("e.created_at", filters);
     const rows = await query(
+      failures,
       "expenses",
       `SELECT e.id, e.title, e.category, e.amount, e.payment_method, e.expense_date, e.vendor,
               e.recorded_by AS user_id, ${actorName("exp")} AS user_name, e.created_at
@@ -463,6 +474,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("i.created_at", filters);
     const rows = await query(
+      failures,
       "invoices",
       `SELECT i.id, i.created_by AS user_id, ${actorName("inv")} AS user_name, i.invoice_number,
               i.total_amount, i.status AS invoice_status, i.prospect_id AS entity_id,
@@ -490,6 +502,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
   {
     const range = rangeSql("py.created_at", filters);
     const rows = await query(
+      failures,
       "payments",
       `SELECT py.id, py.recorded_by AS user_id, ${actorName("pay")} AS user_name, py.amount,
               py.payment_method, py.transaction_reference, py.notes,
@@ -524,6 +537,10 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
     }
   }
 
+  if (filters.strict && failures.length > 0) {
+    throw new Error(`Activity sources failed to load: ${failures.join(", ")}`);
+  }
+
   await attachActorAvatars(allLogs);
   allLogs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   return applyActivityFilters(allLogs, filters);
@@ -535,6 +552,7 @@ export async function fetchActivityLogs(filters: ActivityLogFilters = {}): Promi
  */
 async function attachActorAvatars(logs: ActivityLog[]) {
   const rows = await query(
+    [],
     "actor avatars",
     `SELECT u.id, u.name, prof.full_name, COALESCE(prof.avatar_url, u.avatar_url) AS avatar_url
      FROM \`users\` u

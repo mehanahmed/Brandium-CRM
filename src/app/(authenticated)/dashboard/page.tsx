@@ -48,7 +48,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { crmUsersQueryOptions } from "@/lib/admin-users";
 import { useAuth } from "@/lib/auth";
 import { dashboardMetricsQuery, type DashboardDateRange } from "@/lib/dashboard";
-import { useOrderStages } from "@/lib/orders";
+import { isProductionRole, useOrderStages } from "@/lib/orders";
+import { ProductionDashboard } from "@/components/dashboard/production-dashboard";
 import {
   computeDeliveredCount,
   computeFinanceSummary,
@@ -76,7 +77,9 @@ import {
 } from "@/lib/follow-ups";
 
 export default function DashboardPage() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, role } = useAuth();
+  // Production roles (SW, CP, VG, VE, MK, DEV) see only their own assigned work
+  const productionView = !isAdmin && isProductionRole(role);
   const userId = user?.id ?? "";
 
   const [dateRange, setDateRange] = useState<DateRange | undefined>(() =>
@@ -95,7 +98,7 @@ export default function DashboardPage() {
 
   const metrics = useQuery({
     ...dashboardMetricsQuery(userId, isAdmin, filterUserId, range),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && !productionView,
   });
 
   const orderStages = useOrderStages();
@@ -112,7 +115,7 @@ export default function DashboardPage() {
   const deliveredCount = computeDeliveredCount(ordersQuery.data ?? [], range, filterUserId);
   const activityCounts = useQuery({
     ...dashboardActivityCountsQuery(range, isAdmin ? filterUserId : userId),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && !productionView,
   });
   const projectSteps = computeOrderStatusSteps(
     ordersQuery.data ?? [],
@@ -122,11 +125,11 @@ export default function DashboardPage() {
   );
   const pipelineQuery = useQuery({
     ...prospectStageStepsQuery(range, isAdmin ? filterUserId : userId),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && !productionView,
   });
   const summaryQuery = useQuery({
     ...dashboardSummaryCountsQuery(range, isAdmin ? filterUserId : userId),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && !productionView,
   });
   const router = useRouter();
   const summary = summaryQuery.data;
@@ -148,7 +151,7 @@ export default function DashboardPage() {
   const followUpStages = useQuery(followUpStagesQueryOptions());
   const followUps = useQuery({
     ...followUpBoardQueryOptions(userId, isAdmin),
-    enabled: Boolean(userId),
+    enabled: Boolean(userId) && !productionView,
   });
   const followUpSteps = useMemo(() => {
     const stages = followUpStages.data ?? [];
@@ -186,6 +189,16 @@ export default function DashboardPage() {
     range,
     filterUserId,
   );
+
+  if (productionView) {
+    return (
+      <ProductionDashboard
+        userId={userId}
+        orders={ordersQuery.data ?? []}
+        isLoading={ordersQuery.isLoading}
+      />
+    );
+  }
 
   return (
     <div className="w-full space-y-6 pb-8">

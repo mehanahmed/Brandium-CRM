@@ -1,7 +1,7 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { runMySQLQuery } from "@/lib/mysql-api";
+import { runMySQLQuery, runMySQLWrite } from "@/lib/mysql-api";
 import { generateUUID, getMySQLTimestamp } from "@/lib/mysql-client";
 
 export type Stage = {
@@ -892,6 +892,49 @@ const runNoteWrite = async (sql: string, params: unknown[]) => {
   if (!res.success) throw new Error(res.error || "Failed to save stage note");
 };
 
+const HISTORY_NOTE_SELECT = `SELECT psh.note, psh.changed_at, COALESCE(prof.full_name, u.name) as changed_by_name, COALESCE(prof.avatar_url, u.avatar_url) as changed_by_avatar
+   FROM \`prospect_stage_history\` psh
+   LEFT JOIN \`users\` u ON psh.changed_by = u.id
+   LEFT JOIN \`profiles\` prof ON psh.changed_by = prof.id
+   WHERE psh.\`id\` = ? LIMIT 1;`;
+
+const PROSPECT_NOTE_SELECT = `SELECT p.notes, p.stage_id, p.created_at, COALESCE(prof.full_name, u.name) as creator_name, COALESCE(prof.avatar_url, u.avatar_url) as creator_avatar
+   FROM \`prospects\` p
+   LEFT JOIN \`users\` u ON p.created_by = u.id
+   LEFT JOIN \`profiles\` prof ON p.created_by = prof.id
+   WHERE p.\`id\` = ? LIMIT 1;`;
+
+const textOrNull = (value: unknown) => (value ? String(value) : null);
+
+/**
+ * Read-modify-write of a note array that cannot lose a change made at the same time: the UPDATE
+ * only applies while the column still holds the value we read (`<=> ?`), otherwise we read again
+ * and retry. A failed read throws; it used to count as "no notes" and wipe the history on save.
+ * `build` returns the new value, or undefined when nothing changes.
+ */
+async function updateNotesSafely(
+  table: "prospect_stage_history" | "prospects",
+  column: "note" | "notes",
+  id: string,
+  selectSql: string,
+  build: (row: Record<string, unknown>) => string | null | undefined,
+): Promise<{ row: Record<string, unknown>; value: string | null | undefined }> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const res = await runMySQLQuery<Record<string, unknown>[]>(selectSql, [id]);
+    if (!res.success) throw new Error(res.error || "Could not read the notes. Please try again.");
+    const row = res.data?.[0];
+    if (!row) throw new Error("This record no longer exists.");
+    const value = build(row);
+    if (value === undefined) return { row, value };
+    const changed = await runMySQLWrite(
+      `UPDATE \`${table}\` SET \`${column}\` = ? WHERE \`id\` = ? AND \`${column}\` <=> ?;`,
+      [value, id, row[column] ?? null],
+    );
+    if (changed > 0) return { row, value };
+  }
+  throw new Error("These notes were changed by someone else. Please try again.");
+}
+
 export async function addStageNote(params: {
   prospectId: string;
   historyId?: string | null;
@@ -917,108 +960,62 @@ export async function addStageNote(params: {
   };
 
   try {
-    // If a specific historyId is provided and it's not the virtual 'initial-' item:
-    if (historyId && !historyId.startsWith("initial-")) {
-      const res = await runMySQLQuery<Record<string, unknown>[]>(
-        `SELECT psh.note, psh.changed_at, COALESCE(prof.full_name, u.name) as changed_by_name, COALESCE(prof.avatar_url, u.avatar_url) as changed_by_avatar 
-         FROM \`prospect_stage_history\` psh
-         LEFT JOIN \`users\` u ON psh.changed_by = u.id
-         LEFT JOIN \`profiles\` prof ON psh.changed_by = prof.id
-         WHERE psh.\`id\` = ? LIMIT 1;`,
-        [historyId],
-      );
-      const existingRawNote = (res.data?.[0]?.["note"] as string) || null;
-      const originalDate = (res.data?.[0]?.["changed_at"] as string) || null;
-      const originalAuthor = (res.data?.[0]?.["changed_by_name"] as string) || null;
-      const originalAvatar = (res.data?.[0]?.["changed_by_avatar"] as string) || null;
-
-      const currentItems = parseNotesToItems(
-        existingRawNote,
-        originalDate,
-        originalAuthor,
-        originalAvatar,
-      );
-      const updatedItems = [...currentItems, newNoteItem];
-      const newNotePayload = serializeNoteItems(updatedItems);
-
-      // Preserve original changed_at timestamp of the stage transition
-      await runNoteWrite(`UPDATE \`prospect_stage_history\` SET \`note\` = ? WHERE \`id\` = ?;`, [
-        newNotePayload,
-        historyId,
-      ]);
-    } else {
-      // Check if history has any entry for this prospect
+    // Target: the given history row, else the latest one; the virtual "initial-" item means
+    // the prospect's own notes
+    let targetHistoryId = historyId && !historyId.startsWith("initial-") ? historyId : null;
+    if (!targetHistoryId && !historyId?.startsWith("initial-")) {
       const histRes = await runMySQLQuery<Record<string, unknown>[]>(
-        `SELECT psh.id, psh.note, psh.changed_at, COALESCE(prof.full_name, u.name) as changed_by_name, COALESCE(prof.avatar_url, u.avatar_url) as changed_by_avatar 
-         FROM \`prospect_stage_history\` psh
-         LEFT JOIN \`users\` u ON psh.changed_by = u.id
-         LEFT JOIN \`profiles\` prof ON psh.changed_by = prof.id
-         WHERE psh.\`prospect_id\` = ? ORDER BY psh.\`changed_at\` DESC LIMIT 1;`,
+        "SELECT `id` FROM `prospect_stage_history` WHERE `prospect_id` = ? ORDER BY `changed_at` DESC LIMIT 1;",
         [prospectId],
       );
+      if (!histRes.success) throw new Error(histRes.error || "Could not read the stage history.");
+      targetHistoryId = textOrNull(histRes.data?.[0]?.["id"]);
+    }
 
-      if (histRes?.success && histRes.data?.[0]?.["id"] && !historyId?.startsWith("initial-")) {
-        const targetId = String(histRes.data[0]["id"]);
-        const existingRawNote = (histRes.data[0]["note"] as string) || null;
-        const originalDate = (histRes.data[0]["changed_at"] as string) || null;
-        const originalAuthor = (histRes.data[0]["changed_by_name"] as string) || null;
-        const originalAvatar = (histRes.data[0]["changed_by_avatar"] as string) || null;
+    if (targetHistoryId) {
+      // Only `note` changes, so the stage transition keeps its original changed_at
+      await updateNotesSafely(
+        "prospect_stage_history",
+        "note",
+        targetHistoryId,
+        HISTORY_NOTE_SELECT,
+        (row) =>
+          serializeNoteItems([
+            ...parseNotesToItems(
+              textOrNull(row["note"]),
+              textOrNull(row["changed_at"]),
+              textOrNull(row["changed_by_name"]),
+              textOrNull(row["changed_by_avatar"]),
+            ),
+            newNoteItem,
+          ]),
+      );
+    } else {
+      // No history yet: append to prospects.notes
+      const { row, value } = await updateNotesSafely(
+        "prospects",
+        "notes",
+        prospectId,
+        PROSPECT_NOTE_SELECT,
+        (r) =>
+          serializeNoteItems([
+            ...parseNotesToItems(
+              textOrNull(r["notes"]),
+              textOrNull(r["created_at"]),
+              textOrNull(r["creator_name"]),
+              textOrNull(r["creator_avatar"]),
+            ),
+            newNoteItem,
+          ]),
+      );
 
-        const currentItems = parseNotesToItems(
-          existingRawNote,
-          originalDate,
-          originalAuthor,
-          originalAvatar,
-        );
-        const updatedItems = [...currentItems, newNoteItem];
-        const newNotePayload = serializeNoteItems(updatedItems);
-
-        // Preserve original changed_at timestamp
-        await runNoteWrite(`UPDATE \`prospect_stage_history\` SET \`note\` = ? WHERE \`id\` = ?;`, [
-          newNotePayload,
-          targetId,
-        ]);
-      } else {
-        // Append to prospects.notes
-        const pRes = await runMySQLQuery<Record<string, unknown>[]>(
-          `SELECT p.notes, p.stage_id, p.created_at, COALESCE(prof.full_name, u.name) as creator_name, COALESCE(prof.avatar_url, u.avatar_url) as creator_avatar
-           FROM \`prospects\` p
-           LEFT JOIN \`users\` u ON p.created_by = u.id
-           LEFT JOIN \`profiles\` prof ON p.created_by = prof.id
-           WHERE p.\`id\` = ? LIMIT 1;`,
-          [prospectId],
-        );
-        const existingNotes = (pRes.data?.[0]?.["notes"] as string) || null;
-        const origDate = (pRes.data?.[0]?.["created_at"] as string) || null;
-        const origAuthor = (pRes.data?.[0]?.["creator_name"] as string) || null;
-        const origAvatar = (pRes.data?.[0]?.["creator_avatar"] as string) || null;
-
-        const currentItems = parseNotesToItems(existingNotes, origDate, origAuthor, origAvatar);
-        const updatedItems = [...currentItems, newNoteItem];
-        const newNotePayload = serializeNoteItems(updatedItems);
-
-        await runNoteWrite(`UPDATE \`prospects\` SET \`notes\` = ? WHERE \`id\` = ?;`, [
-          newNotePayload,
-          prospectId,
-        ]);
-
-        // Also insert into prospect_stage_history for full timeline tracking
-        const currentStageId = String(stageId || pRes.data?.[0]?.["stage_id"] || "prospect");
-        const newHistId = generateUUID();
-        await runNoteWrite(
-          `INSERT INTO \`prospect_stage_history\` (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`note\`, \`changed_by\`, \`changed_at\`)
-           VALUES (?, ?, ?, ?, ?, ?, ?);`,
-          [
-            newHistId,
-            prospectId,
-            currentStageId,
-            currentStageId,
-            newNotePayload,
-            userId || null,
-            nowStr,
-          ],
-        );
-      }
+      // Also insert into prospect_stage_history for full timeline tracking
+      const currentStageId = String(stageId || row["stage_id"] || "prospect");
+      await runNoteWrite(
+        `INSERT INTO \`prospect_stage_history\` (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`note\`, \`changed_by\`, \`changed_at\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        [generateUUID(), prospectId, currentStageId, currentStageId, value, userId || null, nowStr],
+      );
     }
 
     return true;
@@ -1032,60 +1029,56 @@ export async function deleteStageNote(params: {
   prospectId: string;
   historyId?: string | null;
   noteIndex: number;
+  /** Preferred: the note's own id, so a note added or removed meanwhile cannot shift it. */
+  noteId?: string | null;
+  /** For older notes without an id: the text the user saw, checked before removing. */
+  noteText?: string | null;
 }): Promise<boolean> {
-  const { prospectId, historyId, noteIndex } = params;
+  const { prospectId, historyId, noteIndex, noteId, noteText } = params;
   if (!prospectId) return false;
+
+  // Index of the note the user picked in the current list, or -1 when it is already gone
+  const pick = (items: StageNoteItem[]) => {
+    if (noteId) return items.findIndex((item) => item.id === noteId);
+    if (noteText == null) return noteIndex;
+    if (items[noteIndex]?.text === noteText) return noteIndex;
+    return items.findIndex((item) => item.text === noteText);
+  };
+  const remove = (items: StageNoteItem[]) => {
+    const index = pick(items);
+    if (index < 0 || index >= items.length) return undefined;
+    const rest = items.filter((_, idx) => idx !== index);
+    return rest.length > 0 ? serializeNoteItems(rest) : null;
+  };
 
   try {
     if (historyId && !historyId.startsWith("initial-")) {
-      const res = await runMySQLQuery<Record<string, unknown>[]>(
-        `SELECT psh.note, psh.changed_at, COALESCE(prof.full_name, u.name) as changed_by_name, COALESCE(prof.avatar_url, u.avatar_url) as changed_by_avatar 
-         FROM \`prospect_stage_history\` psh
-         LEFT JOIN \`users\` u ON psh.changed_by = u.id
-         LEFT JOIN \`profiles\` prof ON psh.changed_by = prof.id
-         WHERE psh.\`id\` = ? LIMIT 1;`,
-        [historyId],
-      );
-      const existingRawNote = (res.data?.[0]?.["note"] as string) || null;
-      const originalDate = (res.data?.[0]?.["changed_at"] as string) || null;
-      const originalAuthor = (res.data?.[0]?.["changed_by_name"] as string) || null;
-      const originalAvatar = (res.data?.[0]?.["changed_by_avatar"] as string) || null;
-
-      const currentItems = parseNotesToItems(
-        existingRawNote,
-        originalDate,
-        originalAuthor,
-        originalAvatar,
-      );
-      const updatedItems = currentItems.filter((_, idx) => idx !== noteIndex);
-      const newNotePayload = updatedItems.length > 0 ? serializeNoteItems(updatedItems) : null;
-
-      await runNoteWrite(`UPDATE \`prospect_stage_history\` SET \`note\` = ? WHERE \`id\` = ?;`, [
-        newNotePayload,
+      await updateNotesSafely(
+        "prospect_stage_history",
+        "note",
         historyId,
-      ]);
-    } else {
-      const pRes = await runMySQLQuery<Record<string, unknown>[]>(
-        `SELECT p.notes, p.created_at, COALESCE(prof.full_name, u.name) as creator_name, COALESCE(prof.avatar_url, u.avatar_url) as creator_avatar 
-         FROM \`prospects\` p
-         LEFT JOIN \`users\` u ON p.created_by = u.id
-         LEFT JOIN \`profiles\` prof ON p.created_by = prof.id
-         WHERE p.\`id\` = ? LIMIT 1;`,
-        [prospectId],
+        HISTORY_NOTE_SELECT,
+        (row) =>
+          remove(
+            parseNotesToItems(
+              textOrNull(row["note"]),
+              textOrNull(row["changed_at"]),
+              textOrNull(row["changed_by_name"]),
+              textOrNull(row["changed_by_avatar"]),
+            ),
+          ),
       );
-      const existingNotes = (pRes.data?.[0]?.["notes"] as string) || null;
-      const origDate = (pRes.data?.[0]?.["created_at"] as string) || null;
-      const origAuthor = (pRes.data?.[0]?.["creator_name"] as string) || null;
-      const origAvatar = (pRes.data?.[0]?.["creator_avatar"] as string) || null;
-
-      const currentItems = parseNotesToItems(existingNotes, origDate, origAuthor, origAvatar);
-      const updatedItems = currentItems.filter((_, idx) => idx !== noteIndex);
-      const newNotePayload = updatedItems.length > 0 ? serializeNoteItems(updatedItems) : null;
-
-      await runNoteWrite(`UPDATE \`prospects\` SET \`notes\` = ? WHERE \`id\` = ?;`, [
-        newNotePayload,
-        prospectId,
-      ]);
+    } else {
+      await updateNotesSafely("prospects", "notes", prospectId, PROSPECT_NOTE_SELECT, (row) =>
+        remove(
+          parseNotesToItems(
+            textOrNull(row["notes"]),
+            textOrNull(row["created_at"]),
+            textOrNull(row["creator_name"]),
+            textOrNull(row["creator_avatar"]),
+          ),
+        ),
+      );
     }
 
     return true;

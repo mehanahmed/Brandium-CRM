@@ -60,7 +60,7 @@ import { useAuth } from "@/lib/auth";
 import { crmUsersQueryOptions, type CrmUser } from "@/lib/admin-users";
 import {
   orderCommentsQueryOptions,
-  orderDetailQueryOptions,
+  publicOrderQueryOptions,
   resolveOrderStatus,
   useAddOrderCommentMutation,
   useDeleteOrderCommentMutation,
@@ -97,11 +97,15 @@ export default function OrderTrackPage() {
   const searchParams = useSearchParams();
   const rawId = params ? params["id"] : undefined;
   const orderRef = Array.isArray(rawId) ? String(rawId[0]) : String(rawId || "");
-  const { user, profile, role, isAdmin } = useAuth();
+  const { user, profile, role, isAdmin, session } = useAuth();
+  // The page is public; comments and staff names only load for a signed-in user.
+  const signedIn = Boolean(session);
 
-  const { data: order, isLoading } = useQuery(orderDetailQueryOptions(orderRef));
-  const { data: comments = [] } = useQuery(orderCommentsQueryOptions(order?.id));
-  const { data: usersData } = useQuery(crmUsersQueryOptions());
+  const { data: order, isLoading } = useQuery(publicOrderQueryOptions(orderRef));
+  const { data: comments = [] } = useQuery(
+    orderCommentsQueryOptions(signedIn ? order?.id : undefined),
+  );
+  const { data: usersData } = useQuery({ ...crmUsersQueryOptions(), enabled: signedIn });
   const usersById = useMemo(() => {
     const map = new Map<string, CrmUser>();
     ((usersData as CrmUser[]) || []).forEach((u) => map.set(u.id, u));
@@ -399,11 +403,15 @@ export default function OrderTrackPage() {
     <>
       <main className="w-full max-w-[210mm] mx-auto space-y-4 sm:space-y-5 pb-6 print:space-y-0">
         <div className="flex items-center justify-between gap-2 print:hidden">
-          <Button asChild variant="ghost" size="sm" className="cursor-pointer">
-            <Link href="/orders">
-              <ArrowLeft className="mr-1.5 h-4 w-4" /> Back to Orders
-            </Link>
-          </Button>
+          {signedIn ? (
+            <Button asChild variant="ghost" size="sm" className="cursor-pointer">
+              <Link href="/orders">
+                <ArrowLeft className="mr-1.5 h-4 w-4" /> Back to Orders
+              </Link>
+            </Button>
+          ) : (
+            <span />
+          )}
           <SalesPdfActions getData={() => orderToPdfData(order)} />
         </div>
 
@@ -427,7 +435,7 @@ export default function OrderTrackPage() {
               </h3>
               <div className="text-xs text-muted-foreground mt-2">
                 {lastStatusEntry
-                  ? `Last status update: ${formatDate(lastStatusEntry.timestamp, true)} by ${lastStatusEntry.changedByUserName}`
+                  ? `Last status update: ${formatDate(lastStatusEntry.timestamp, true)}${lastStatusEntry.changedByUserName ? ` by ${lastStatusEntry.changedByUserName}` : ""}`
                   : "Status pending."}
               </div>
             </div>
@@ -834,9 +842,11 @@ export default function OrderTrackPage() {
                             <CalendarDays className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 opacity-70 shrink-0" />
                             {formatDate(entry.timestamp, false)}
                             <span className="mx-1.5 hidden sm:inline">&bull;</span>
-                            <span className="block sm:inline w-full sm:w-auto mt-0.5 sm:mt-0">
-                              {entry.changedByUserName}
-                            </span>
+                            {entry.changedByUserName && (
+                              <span className="block sm:inline w-full sm:w-auto mt-0.5 sm:mt-0">
+                                {entry.changedByUserName}
+                              </span>
+                            )}
                           </div>
                           {entry.notes && (
                             <p className="text-sm sm:text-base mt-2 sm:mt-2.5 bg-muted/50 p-3 sm:p-4 rounded-lg border border-border/40 text-foreground/80 shadow-xs">
@@ -852,73 +862,75 @@ export default function OrderTrackPage() {
           </CardContent>
         </Card>
 
-        {/* Comments & Updates */}
-        <Card className="shadow-2xl border border-border/40 bg-card hover:shadow-[#67B239]/10 transition-shadow duration-300 rounded-xl print:hidden">
-          <CardHeader className="bg-card p-6 sm:p-8 border-b border-border/40">
-            <div className="flex items-center space-x-3 sm:space-x-4">
-              <MessageCircle className="h-8 w-8 sm:h-10 sm:w-10 text-[#67B239] shrink-0 p-1.5 bg-[#67B239]/10 rounded-lg border border-[#67B239]/20" />
-              <CardTitle className="text-xl sm:text-2xl font-semibold text-card-foreground">
-                Comments & Updates ({comments.length})
-              </CardTitle>
-            </div>
-            <CardDescription className="text-muted-foreground mt-1 ml-11 sm:ml-14">
-              Share updates or ask questions about this order.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-6 sm:p-8 space-y-5">
-            <div className="space-y-4 sm:space-y-5 max-h-150 overflow-y-auto pr-2 sm:pr-3 custom-scrollbar">
-              {topLevelComments.map((comment) => renderComment(comment))}
-              {comments.length === 0 && (
-                <div className="text-center py-8 sm:py-10">
-                  <MessageCircle className="mx-auto h-16 w-16 text-muted-foreground/30" />
-                  <p className="mt-4 sm:mt-5 text-muted-foreground text-base sm:text-lg">
-                    No comments yet.
-                  </p>
-                  <p className="text-xs sm:text-sm text-muted-foreground">
-                    Be the first to add one using the form below!
-                  </p>
-                </div>
-              )}
-            </div>
-            <Separator className="my-6 sm:my-8 bg-border/30" />
-            <form onSubmit={handleCommentSubmit} className="mt-2.5 flex items-start space-x-2.5">
-              <Avatar className="h-9 w-9 sm:h-10 sm:w-10 border-2 border-[#67B239]/30 shadow-xs shrink-0 mt-0.5">
-                <AvatarImage src={myAvatar || undefined} alt="Your avatar" />
-                <AvatarFallback className="bg-[#67B239]/10 text-[#55962e] text-sm font-semibold">
-                  {getInitials(myName)}
-                </AvatarFallback>
-              </Avatar>
-              <div className="flex-1">
-                <Textarea
-                  id="comment"
-                  placeholder="Write a comment..."
-                  className="min-h-20 sm:min-h-25 text-sm sm:text-base mb-2.5 p-3 bg-background/70 border-border/70 rounded-lg shadow-inner"
-                  value={newComment}
-                  onChange={(e) => setNewComment(e.target.value)}
-                  disabled={addCommentMutation.isPending}
-                  rows={3}
-                />
-                <div className="flex justify-end">
-                  <Button
-                    type="submit"
-                    className="shadow-md transition-all duration-300 bg-[#67B239] hover:bg-[#5aa030] text-white font-semibold text-sm py-2 px-5 rounded-lg cursor-pointer"
-                    disabled={addCommentMutation.isPending || !newComment.trim()}
-                  >
-                    {addCommentMutation.isPending ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Posting...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="mr-2 h-4 w-4" /> Post Comment
-                      </>
-                    )}
-                  </Button>
-                </div>
+        {/* Comments & Updates: staff only */}
+        {signedIn && (
+          <Card className="shadow-2xl border border-border/40 bg-card hover:shadow-[#67B239]/10 transition-shadow duration-300 rounded-xl print:hidden">
+            <CardHeader className="bg-card p-6 sm:p-8 border-b border-border/40">
+              <div className="flex items-center space-x-3 sm:space-x-4">
+                <MessageCircle className="h-8 w-8 sm:h-10 sm:w-10 text-[#67B239] shrink-0 p-1.5 bg-[#67B239]/10 rounded-lg border border-[#67B239]/20" />
+                <CardTitle className="text-xl sm:text-2xl font-semibold text-card-foreground">
+                  Comments & Updates ({comments.length})
+                </CardTitle>
               </div>
-            </form>
-          </CardContent>
-        </Card>
+              <CardDescription className="text-muted-foreground mt-1 ml-11 sm:ml-14">
+                Share updates or ask questions about this order.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-6 sm:p-8 space-y-5">
+              <div className="space-y-4 sm:space-y-5 max-h-150 overflow-y-auto pr-2 sm:pr-3 custom-scrollbar">
+                {topLevelComments.map((comment) => renderComment(comment))}
+                {comments.length === 0 && (
+                  <div className="text-center py-8 sm:py-10">
+                    <MessageCircle className="mx-auto h-16 w-16 text-muted-foreground/30" />
+                    <p className="mt-4 sm:mt-5 text-muted-foreground text-base sm:text-lg">
+                      No comments yet.
+                    </p>
+                    <p className="text-xs sm:text-sm text-muted-foreground">
+                      Be the first to add one using the form below!
+                    </p>
+                  </div>
+                )}
+              </div>
+              <Separator className="my-6 sm:my-8 bg-border/30" />
+              <form onSubmit={handleCommentSubmit} className="mt-2.5 flex items-start space-x-2.5">
+                <Avatar className="h-9 w-9 sm:h-10 sm:w-10 border-2 border-[#67B239]/30 shadow-xs shrink-0 mt-0.5">
+                  <AvatarImage src={myAvatar || undefined} alt="Your avatar" />
+                  <AvatarFallback className="bg-[#67B239]/10 text-[#55962e] text-sm font-semibold">
+                    {getInitials(myName)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1">
+                  <Textarea
+                    id="comment"
+                    placeholder="Write a comment..."
+                    className="min-h-20 sm:min-h-25 text-sm sm:text-base mb-2.5 p-3 bg-background/70 border-border/70 rounded-lg shadow-inner"
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    disabled={addCommentMutation.isPending}
+                    rows={3}
+                  />
+                  <div className="flex justify-end">
+                    <Button
+                      type="submit"
+                      className="shadow-md transition-all duration-300 bg-[#67B239] hover:bg-[#5aa030] text-white font-semibold text-sm py-2 px-5 rounded-lg cursor-pointer"
+                      disabled={addCommentMutation.isPending || !newComment.trim()}
+                    >
+                      {addCommentMutation.isPending ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Posting...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="mr-2 h-4 w-4" /> Post Comment
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        )}
       </main>
 
       <AlertDialog

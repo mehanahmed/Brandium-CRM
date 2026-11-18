@@ -24,6 +24,8 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
+
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -130,6 +132,8 @@ export default function StageManagementPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingStage, setEditingStage] = useState<Stage | null>(null);
   const [search, setSearch] = useState<string>("");
+  const [deactivateTarget, setDeactivateTarget] = useState<Stage | null>(null);
+  const [deleteStageTarget, setDeleteStageTarget] = useState<Stage | null>(null);
 
   const rawStagesList = stages.data ?? [];
   const filteredStages = rawStagesList.filter((s) => {
@@ -204,7 +208,12 @@ export default function StageManagementPage() {
       toast.error("System stages are required for core CRM workflows and cannot be deactivated.");
       return;
     }
-    updateMutation.mutate({ id: stage.id, is_active: !stage.is_active });
+    // Deactivating hides the stage from pipelines, so ask first
+    if (stage.is_active) {
+      setDeactivateTarget(stage);
+      return;
+    }
+    updateMutation.mutate({ id: stage.id, is_active: true });
   };
 
   const handleDelete = (id: string) => {
@@ -213,9 +222,7 @@ export default function StageManagementPage() {
       toast.error("System stages cannot be deleted as they are required for CRM workflows.");
       return;
     }
-    if (window.confirm("Are you sure you want to delete this stage? This cannot be undone.")) {
-      deleteMutation.mutate(id);
-    }
+    setDeleteStageTarget(stage ?? null);
   };
 
   return (
@@ -662,6 +669,49 @@ export default function StageManagementPage() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmActionDialog
+        open={deactivateTarget !== null}
+        onOpenChange={(open) => !open && setDeactivateTarget(null)}
+        title="Deactivate this stage?"
+        description={
+          <>
+            <span className="font-semibold">{deactivateTarget?.name}</span> will be hidden from
+            pipelines and forms. Existing leads keep their history.
+          </>
+        }
+        confirmLabel="Yes, deactivate"
+        destructive
+        pending={updateMutation.isPending}
+        onConfirm={() => {
+          if (!deactivateTarget) return;
+          updateMutation.mutate(
+            { id: deactivateTarget.id, is_active: false },
+            { onSettled: () => setDeactivateTarget(null) },
+          );
+        }}
+      />
+
+      <ConfirmActionDialog
+        open={deleteStageTarget !== null}
+        onOpenChange={(open) => !open && setDeleteStageTarget(null)}
+        title="Delete this stage?"
+        description={
+          <>
+            <span className="font-semibold">{deleteStageTarget?.name}</span> will be deleted. This
+            cannot be undone.
+          </>
+        }
+        confirmLabel="Yes, delete stage"
+        destructive
+        pending={deleteMutation.isPending}
+        onConfirm={() => {
+          if (!deleteStageTarget) return;
+          deleteMutation.mutate(deleteStageTarget.id, {
+            onSettled: () => setDeleteStageTarget(null),
+          });
+        }}
+      />
     </div>
   );
 }

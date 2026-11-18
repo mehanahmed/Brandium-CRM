@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
+import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "./mysql-api";
 import { generateUUID, getMySQLTimestamp } from "./mysql-client";
 import { QUOTATION_INSERT_SQL } from "./trusted-sql";
 import { resolveStageIcon, type Stage } from "./stages";
@@ -99,7 +99,12 @@ export type SaveQuotationPayload = {
   terms?: string[] | null | undefined;
   client_address?: string | null;
   created_at?: string | null;
+  /** Edit only: the `updated_at` the dialog loaded; the save is refused if someone saved since. */
+  expected_updated_at?: string | null | undefined;
 };
+
+const STALE_QUOTATION =
+  "This quotation was changed by someone else. Please reload it and save again.";
 
 export const QUOTATION_WORKFLOW_STAGES: Stage[] = [
   {
@@ -450,8 +455,12 @@ export function useSaveQuotationMutation() {
       const isUpdate = Boolean(payload.id);
 
       if (isUpdate) {
-        await runMySQLWrite(
-          `UPDATE quotations SET 
+        // Payments, status and notes are whole values: refuse to overwrite a newer save.
+        // Rows that never had updated_at (legacy) are not checked.
+        const expected = payload.expected_updated_at || null;
+        const changed = await runMySQLWrite(
+          `UPDATE quotations SET
+            updated_at = NOW(),
             title = ?, 
             prospect_id = ?,
             client_name = ?, 
@@ -473,7 +482,7 @@ export function useSaveQuotationMutation() {
             assigned_artist_id = ?,
             created_by = ?,
             terms = IF(?, ?, terms)
-          WHERE id = ?;`,
+          WHERE id = ? AND (? IS NULL OR updated_at IS NULL OR updated_at <=> ?);`,
           [
             payload.title,
             payload.prospect_id !== undefined ? payload.prospect_id : null,
@@ -502,8 +511,11 @@ export function useSaveQuotationMutation() {
             payload.terms !== undefined ? 1 : 0,
             payload.terms?.length ? JSON.stringify(payload.terms) : null,
             id,
+            expected,
+            expected,
           ],
         );
+        if (changed === 0) throw new Error(STALE_QUOTATION);
       } else {
         // The next code (QT-1001, QT-1002, ...) is computed by MySQL inside the INSERT. Two saves
         // at the same instant can pick the same number; the unique key rejects one, so retry once.
@@ -571,12 +583,12 @@ export function useUpdateQuotationAssigneesMutation() {
   return useMutation({
     mutationFn: async ({ quotationId, userIds }: { quotationId: string; userIds: string[] }) => {
       // 1. Clear current assignees for this quotation
-      await runMySQLQuery("DELETE FROM quotation_assignees WHERE quotation_id = ?;", [quotationId]);
+      await runMySQLWrite("DELETE FROM quotation_assignees WHERE quotation_id = ?;", [quotationId]);
 
       // 2. Insert new assignees
       for (const uid of userIds) {
         const assignId = generateUUID();
-        await runMySQLQuery(
+        await runMySQLWrite(
           "INSERT INTO quotation_assignees (id, quotation_id, user_id) VALUES (?, ?, ?);",
           [assignId, quotationId, uid],
         );
@@ -584,7 +596,7 @@ export function useUpdateQuotationAssigneesMutation() {
 
       // 3. Update cached array on quotations table
       const jsonIds = JSON.stringify(userIds);
-      await runMySQLQuery("UPDATE quotations SET assigned_user_ids = ? WHERE id = ?;", [
+      await runMySQLWrite("UPDATE quotations SET assigned_user_ids = ? WHERE id = ?;", [
         jsonIds,
         quotationId,
       ]);
@@ -621,53 +633,52 @@ export function useUpdateQuotationStatusMutation() {
             ? 100
             : undefined;
 
-      // Fetch current status_history
-      const curr = await runMySQLQuery<Record<string, unknown>[]>(
-        "SELECT status_history FROM quotations WHERE id = ? LIMIT 1;",
-        [payload.id],
-      );
-      let historyList: Array<{
-        id: string;
-        status: string;
-        timestamp: string;
-        changedByUserName: string;
-        notes?: string | null;
-        proofUrl?: string | null;
-      }> = [];
-      if (curr.success && curr.data && curr.data[0]?.["status_history"]) {
-        try {
-          const raw = curr.data[0]["status_history"];
-          const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-          if (Array.isArray(parsed)) historyList = parsed;
-        } catch {
-          // ignore parse error
+      // status_history is rebuilt in the browser, so write it only while it still holds what we
+      // read (compare-and-swap); a change saved meanwhile makes us read again instead of losing it
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const curr = await runMySQLQuery<Record<string, unknown>[]>(
+          "SELECT status_history FROM quotations WHERE id = ? LIMIT 1;",
+          [payload.id],
+        );
+        if (!curr.success) throw new Error(curr.error || "Could not read the quotation.");
+        if (!curr.data?.[0]) throw new Error("This quotation no longer exists.");
+        const rawHistory = curr.data[0]["status_history"] ?? null;
+
+        let historyList: Array<Record<string, unknown>> = [];
+        if (rawHistory) {
+          try {
+            const parsed = typeof rawHistory === "string" ? JSON.parse(rawHistory) : rawHistory;
+            if (Array.isArray(parsed)) historyList = parsed;
+          } catch {
+            // Unreadable history: start a new list rather than block the stage change
+          }
         }
-      }
 
-      historyList.push({
-        id: `sh-${Date.now()}`,
-        status: payload.stage_name || payload.stage_id,
-        timestamp: new Date().toISOString(),
-        changedByUserName: payload.changed_by_name || "Mehan Ahmed",
-        notes:
-          payload.notes || `Quotation moved to stage "${payload.stage_name || payload.stage_id}".`,
-        proofUrl: payload.proof_url || null,
-      });
+        historyList.push({
+          id: `sh-${Date.now()}`,
+          status: payload.stage_name || payload.stage_id,
+          timestamp: new Date().toISOString(),
+          changedByUserName: payload.changed_by_name || "Unknown user",
+          notes:
+            payload.notes ||
+            `Quotation moved to stage "${payload.stage_name || payload.stage_id}".`,
+          proofUrl: payload.proof_url || null,
+        });
 
-      const updatedHistoryStr = JSON.stringify(historyList);
-
-      if (progressUpdate !== undefined) {
-        await runMySQLQuery(
-          "UPDATE quotations SET status = ?, progress = ?, status_history = ?, updated_at = NOW() WHERE id = ?;",
-          [payload.stage_id, progressUpdate, updatedHistoryStr, payload.id],
+        const changed = await runMySQLWrite(
+          `UPDATE quotations SET status = ?, progress = COALESCE(?, progress), status_history = ?, updated_at = NOW()
+           WHERE id = ? AND status_history <=> ?;`,
+          [
+            payload.stage_id,
+            progressUpdate ?? null,
+            JSON.stringify(historyList),
+            payload.id,
+            rawHistory,
+          ],
         );
-      } else {
-        await runMySQLQuery(
-          "UPDATE quotations SET status = ?, status_history = ?, updated_at = NOW() WHERE id = ?;",
-          [payload.stage_id, updatedHistoryStr, payload.id],
-        );
+        if (changed > 0) return { success: true };
       }
-      return { success: true };
+      throw new Error(STALE_QUOTATION);
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ["crm-quotations-with-stages"] });
@@ -699,7 +710,7 @@ export function useDeleteQuotationMutation() {
         throw new Error("Cannot delete protected default quotations");
       }
 
-      await runMySQLQuery("UPDATE quotations SET is_active = 0 WHERE id = ?;", [quotationId]);
+      await runMySQLWriteOne("UPDATE quotations SET is_active = 0 WHERE id = ?;", [quotationId]);
       return { success: true };
     },
     onSuccess: () => {

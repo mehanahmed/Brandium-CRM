@@ -63,6 +63,13 @@ export async function runMySQLWrite(sql: string, params: unknown[] = []): Promis
   return Number(res.data?.[0]?.affectedRows ?? 0);
 }
 
+/** Like runMySQLWrite, but 0 rows is an error too (row gone, or not the caller's to change). */
+export async function runMySQLWriteOne(sql: string, params: unknown[] = []): Promise<number> {
+  const changed = await runMySQLWrite(sql, params);
+  if (changed === 0) throw new Error("Not found, or you do not have access to change it.");
+  return changed;
+}
+
 /**
  * Generates a standard RFC 4122 v4 UUID directly from the MySQL database engine.
  */

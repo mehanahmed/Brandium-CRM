@@ -823,6 +823,14 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
   - Avatars come from `fetchMeetings`, which joins `profiles` / `users` on `assigned_user_id` and returns `assigned_user_avatar`. Do not look up avatars from names.
   - Phones show status dots only; `sm` and up show avatar chips.
 
+- **Admin Accounts Cannot Be Deleted**:
+  - `softDeleteCrmUser()` refuses admin targets, and the Users menu hides "Delete User" for admin rows. `/api/mysql` also refuses a raw `UPDATE users ... is_deleted = 1` whose target (last param) has role `ADMIN`, so the rule holds even without the UI.
+
+- **Live Updates to Every Page (Server-Sent Events, `/api/realtime`)**:
+  - Chose SSE over WebSocket (no extra process or port). `/api/realtime` (session-only) keeps a stream open. `/api/mysql` calls `broadcastChange()` after every successful INSERT / UPDATE / DELETE / REPLACE, and `RealtimeSync` (mounted in `providers.tsx`) invalidates all active queries after a 400ms debounce.
+  - Subscribers live on `globalThis` (`src/lib/realtime-server.ts`), so only clients of the same Node process get the events. Multi-instance deployment needs a shared bus (Redis or MySQL polling).
+  - Writes that bypass `/api/mysql` (server functions called directly) do not broadcast. Heartbeat every 25s keeps proxies from closing the stream.
+
 - **Live Data Without Full Page Refresh (`src/app/providers.tsx`)**:
   - The QueryClient used `staleTime` 2 min and no refetch on window focus, so data stayed old until a hard reload. Now `staleTime` is 15s, `refetchOnWindowFocus` is `"always"`, `refetchOnReconnect` is on, and `refetchInterval` is 30s with `refetchIntervalInBackground: false` (polling pauses in background tabs).
   - Mutations must still invalidate their own query keys; polling only covers changes made elsewhere. Do not add global polling inside a page on top of this.
@@ -831,6 +839,17 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
   - `POST {userId}` (admin session only) switches the signed `brandium_session` cookie to that user and stores the admin's own signed session in `brandium_admin_return` (httpOnly). `DELETE` restores the admin session after checking its signature and that it is still admin.
   - Refused: non-admin callers, nested view-as, admin targets, inactive or deleted users. The session carries `viewAsBy`; the browser keeps `viewAs.adminName` in the stored copy and shows a banner with "Return to admin" (`AppShell`).
   - Writes made while viewing are recorded as the target user, so use it for checking what a user sees, not for editing on their behalf.
+
+- **Optional Stage Deadline in Every Assign Dialog (progress only when set)**:
+  - `AssignStageDialog` has an optional "Deadline" datetime field. The value is stored on that stage's `orders.status_history` entry as `deadline` (ISO, or null) by `useAssignStageMutation`.
+  - `getStageDeadline()` reads only that explicit deadline, so no deadline means no progress bar. The old delivery-date split and 48h default were removed. Project cards show "Not set" instead of a date for non-delivered stages without a deadline.
+
+- **Content Planner Brief Popup Before Assign (`orders.brief`)**:
+  - Moving an order into Content Planner opens `ContentPlannerBriefDialog` first (Script Drive Link and Shooting Brief required; Reference, Model/Artist Names, Location, Aspect Ratio, Special Notes optional). Saving stores JSON in `orders.brief` (`saveOrderBrief`), then the user picker opens.
+  - `StageAssignFlow` (`src/components/orders/stage-assign-flow.tsx`) wraps `AssignStageDialog` on both the Projects board and the Orders page; use it, not `AssignStageDialog`, for any new assign entry point.
+  - Video Editor, Marketer and Developer use one generic `StageBriefDialog` driven by `STAGE_BRIEF_CONFIG` (`src/components/orders/stage-brief-config.ts`), saved under `stage_briefs.<key>` via `saveStageBrief`. Add a stage by adding a config entry. Passwords (client login secrets) are NOT collected or stored; share them through a password manager.
+  - Videographer does the same with `VideographerBriefDialog` (Script for Director, Camera Setup, Shooting Spot/Location, Artist/Talent, Special Notes; all optional), saved under `stage_briefs.videographer` (`saveVideographerBrief`).
+  - Script Writer does the same with `ScriptWriterRequirementsDialog` (Facebook/website links, competitor pages, brand logo upload, Video Ratio *, Model Restrictions *, product/pain/audience/message/CTA/notes). Saved as `orders.stage_briefs` JSON under `scriptWriter` (`saveScriptWriterRequirements`, merged with JSON_MERGE_PATCH so other stage briefs stay).
 
 - **Assign Dialog Lists Only the Stage Role (`assign-stage-dialog.tsx`)**:
   - The "Assign To" list shows only users whose `users.role` equals the stage's role (SW, CP, VG, VE, MK, DEV). The "Other users" group was removed. A stage with no role lists every active user.
@@ -867,3 +886,46 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
   - An agent's active state comes from `users.status` (`'Active'`), not `users.is_active`. In the local DB every user has `is_active = 0`, so reading `is_active` marked everyone Inactive. Soft-deleted users (`is_deleted = 1`) are left out.
   - Won / pipeline / lost values come from `orders.total_amount` (all time, not deleted). `delivered` = won, `canceled` = lost, everything else (including `on-hold`) = pipeline. Per agent, the owner is `orders.crm_user_id`. `opportunities` is no longer read here; it is empty locally. The `sales` table lacks the columns `won-sales.ts` selects (`deal_value`, `created_by`, `is_deleted`, `won_at`).
   - Activity types are `follow_up_created` / `follow_up_updated` (underscore). Matching `includes("followup")` counted 0 follow-ups for everyone, so the report now uses `startsWith("follow_up")`. Stage changes are not in `activities`; they are counted from `prospect_stage_history.changed_by`.
+
+- **Public Order Track Page (`/track/[id]`, no login)**:
+  - The page lives at `src/app/track/[id]/page.tsx`, outside the `(authenticated)` group, so it has no sidebar and no login redirect. Every `/track` link (orders page, project cards, create-order redirect) opens in a new tab (`target="_blank" rel="noopener noreferrer"`, `window.open` for `router.push`).
+  - Data comes from `GET /api/public/track/[ref]` (`src/app/api/public/track/[ref]/route.ts`), which selects a whitelist of columns and blanks staff names, status-history notes, payment recorder ids, and never returns `designer_id`, `crm_user_id`, `brief`, `stage_briefs` or comments. The client maps the row with `mapOrderRow` via `publicOrderQueryOptions`.
+  - Comments and the staff-only status-history names show only when `useAuth().session` exists (`signedIn`).
+  - `orders.ts` imports `terms-editor.tsx` (a `"use client"` module), so server code must never call `mapOrderRow` or other `orders.ts` functions. Only the `ORDER_SELECT_SQL` constant is imported server-side, and the route returns raw whitelisted rows.
+  - Order numbers are sequential (`ORD-102952`), so anyone can read an invoice by guessing a number. Revisit with an unguessable public token if that is not acceptable.
+
+- **Brief Saves Must Not Bump `orders.updated_at` (stale-order error on Assign)**:
+  - Saving a brief (`saveOrderBrief`, `saveStageBrief`, `saveVideographerBrief`, `saveScriptWriterRequirements`) used to set `updated_at = now`. The Assign step still held the old `updated_at`, so `writeStatusChange` failed its `updated_at` check with "This order was changed by someone else" (Runtime Error).
+  - Brief saves now write only the brief columns. The `updated_at` check stays for `status_history` writes, which are the only whole-value overwrites that need it.
+  - Rule: a save that does not change `status_history` must not touch `updated_at`.
+
+- **Production Dashboard Counts Real Stage Work, Not `designer_id` Alone**:
+  - `designer_id` keeps the last assignee after an order moves to a non-assignable stage (`COALESCE(?, designer_id)`), so counting `designer_id === me` showed orders that had already left the user's stage (e.g. an SW user still "had" an order sitting in Video Graphy Complete).
+  - Work on the user's desk now = `isOnMyStage(order, userId, role)` (`src/lib/production-activity.ts`): assigned to them AND the current stage's `role` equals their role code. All-time stage work = `collectAssignments()`, read from `status_history`.
+  - `writeStatusChange()` now stores `assignedToUserId` on assignment entries; older entries are matched by the "assigned to <name>" note. Per user rule, the work is complete when the order moves from the assigned stage to any other stage (cancel and on-hold included); a new assignment in the same stage (another user of the role) makes the work theirs, so the earlier assignment is not counted for the first user at all; same-stage note/link entries are skipped. Assigned and Completed count distinct orders. The public track API whitelists history fields, so the id is not exposed.
+  - Self-check lives outside the repo; re-check the rules with a few fake orders (stale designer_id, id match, name match, late hand-off, missed deadline) when changing them.
+
+- **`/api/mysql` Guard Bypasses Closed (audit fixes 1–5)**:
+  - `INTO/**/OUTFILE` passed the raw-text check because the scoper later turned the comment into a space. `route.ts` now runs `isAdminOnlySql` again on the rewritten SQL, and `scopeSqlForUser` refuses the words `outfile`, `dumpfile`, `load_file`, `table`, `handler` for non-admins.
+  - `SELECT 1,…,11 UNION ALL SELECT * FROM users` returned password hashes under number keys. Non-admin reads of `users` now go through `SAFE_COLUMNS` (`sql-scope.ts`): `(SELECT id, name, email, … FROM users WHERE (TRUE))`. Add any new secret-bearing table there.
+  - MySQL starts a `--` comment before a control character; the lexer did not, so `--\x01'` hid a whole query. Control characters are refused, and lexer whitespace is ASCII only (JS `\s` also matches Unicode spaces MySQL does not).
+  - A non-admin could link themselves to someone else's lead/quotation/project by inserting a meeting, follow-up or assignee row. Writes that mention `meetings`, `prospect_stage_history`, `quotation_assignees` or `project_assignees` now run through `runLinkGuardedWrite()` (`src/lib/link-guard-server.ts`): a transaction that counts parents the user reaches only through links before and after, and rolls back with 403 when the count goes up. Tables the role reads in full are skipped.
+  - Logout also clears `brandium_admin_return`, so signing out during "View as" no longer leaves an admin session cookie behind.
+  - Self-check: `node --experimental-strip-types src/lib/sql-scope.check.ts` now includes these bypass strings.
+
+- **Audit Fixes 6–8: Real Meeting SMS, Safe Note and Quotation Saves**:
+  - `createMeeting()` inserted `sms_sent = 1` when "Send SMS now" was ticked but never called the gateway. It now inserts 0 and calls `sendMeetingReminderSms()`, which sets the flag only after a real send; a failed SMS comes back as `sms_error` (the meeting stays booked) and `ScheduleMeetingDialog` shows a warning toast. `updateMeeting()` uses `runMySQLWrite`.
+  - Note arrays (`prospect_stage_history.note`, `prospects.notes`) go through `updateNotesSafely()` (`src/lib/stages.ts`): a failed read throws (it used to count as "no notes" and wipe the history), and the UPDATE is compare-and-swap (`WHERE id = ? AND note <=> ?`, 3 retries), so two people adding notes at once both keep theirs. `deleteStageNote` removes by `noteId` (or the shown text for old notes without an id), not only by position.
+  - Quotation edit (`useSaveQuotationMutation`) bumps `updated_at` and refuses with "changed by someone else" when `expected_updated_at` (sent by `EditQuotationDialog`) no longer matches; legacy rows with NULL `updated_at` are not checked. The stage change (`useUpdateQuotationStatusMutation`) is compare-and-swap on `status_history`, throws on failure, and no longer records unknown users as a hard-coded staff name.
+  - Rule: any whole-value JSON/text overwrite built in the browser must use compare-and-swap or an `updated_at` check, and must use `runMySQLWrite`.
+
+- **Audit Fixes 9–17: Setup Tables, Timeouts, Login, Public Track, Silent Writes, Bootstrap**:
+  - Setup tables: `followup_stages`, `tenants`, `memberships`, `schema_migrations` are admin-only (`PROTECTED_TABLES`). Writes to `stages` / `services` need `perm-stages-manage` / `perm-services-manage` (`TABLE_WRITE_PERMISSIONS` in `/api/mysql`, target from `writeTargetOf()`). `profiles` is readable by all but non-admins may only write their own row (`writeOnlyRules`). Multi-table UPDATE/DELETE is refused for non-admins on every table.
+  - Every pooled connection sets `max_statement_time = 60` (MariaDB) and `max_execution_time = 60000` (MySQL), so one `SELECT SLEEP(...)` cannot hold the pool. mysql2's pool `connection` event passes the raw callback connection even though the types say promise: pass a callback to `query()` there, or an unknown variable error crashes the process.
+  - Login: 10 failed attempts per email + IP in 15 minutes returns 429 (per process, on `globalThis`); unknown emails still run one bcrypt compare (`DUMMY_HASH`) so timing does not reveal accounts.
+  - `/api/public/track/[ref]` strips `and assigned to <name>` and `Reason: ...` from status notes (`publicNote`) and returns only `id, amount, date, createdAt, paymentMethod, status` per payment. Never spread a stored JSON object into a public response; list the fields.
+  - `PROSPECT_PHONE_MATCH_SQL` runs unscoped, so it returns only id, stage, agent name and date, never another lead's name, business or phone.
+  - Deletes use `runMySQLWriteOne()` (`src/lib/mysql-api.ts`), which throws on failure AND on 0 rows, so deleting a row the user cannot reach says so instead of "deleted". Expense, meeting activity, order comment, prospect update and quotation assignee writes use `runMySQLWrite()`.
+  - `useCreateFollowUp` inserts the follow-up history row first and only then moves the prospect, and no longer swallows errors (it used to show "scheduled" for a failed save).
+  - Schema bootstrap latch lives on `globalThis.__brandiumSchemaLatch`; a failed bootstrap is retried at most once a minute (it used to re-run all DDL on every request), and a failed `ALTER DATABASE` charset change no longer aborts the bootstrap.
+  - Self-checks: `node --experimental-strip-types src/lib/sql-scope.check.ts` and `node src/lib/production-activity.check.mjs` (stage-work counting rules).

@@ -3,8 +3,10 @@ import bcrypt from "bcryptjs";
 import { createSingleMySQLConnection } from "@/lib/mysql-server";
 import { ensureMySQLTablesExist } from "@/lib/auth.functions";
 import {
+  clearRawCookie,
   clearSessionCookie,
   readSession,
+  RETURN_COOKIE,
   setSessionCookie,
   unauthorized,
 } from "@/lib/session-server";
@@ -20,12 +22,44 @@ export async function GET(req: Request) {
 export async function DELETE(req: Request) {
   const res = NextResponse.json({ success: true });
   clearSessionCookie(req, res);
+  // Logging out while using "View as" must also drop the saved admin session
+  clearRawCookie(req, res, RETURN_COOKIE);
   return res;
 }
 
 // One message for "no such user" and "wrong password", so the form cannot be used to find
 // out which emails have accounts.
 const INVALID_LOGIN = "Invalid email or password.";
+
+// An unknown email still pays for one bcrypt compare, so the answer time does not reveal it
+const DUMMY_HASH = bcrypt.hashSync("brandium-no-such-user", 10);
+
+// Failed attempts per email + IP. On globalThis so `next dev` reloads share it.
+// shortcut: per process only; move to MySQL or Redis when running more than one server.
+const MAX_FAILURES = 10;
+const FAILURE_WINDOW_MS = 15 * 60 * 1000;
+type Failures = Map<string, { count: number; resetAt: number }>;
+const failureStore = globalThis as typeof globalThis & { __brandiumLoginFailures?: Failures };
+const failures: Failures = (failureStore.__brandiumLoginFailures ??= new Map());
+
+const attemptKey = (req: Request, email: string) =>
+  `${email}|${req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local"}`;
+
+function isLockedOut(key: string, now: number) {
+  const entry = failures.get(key);
+  if (entry && entry.resetAt <= now) failures.delete(key);
+  return Boolean(entry && entry.resetAt > now && entry.count >= MAX_FAILURES);
+}
+
+function recordFailure(key: string, now: number) {
+  if (failures.size > 10_000) {
+    for (const [k, v] of failures) if (v.resetAt <= now) failures.delete(k);
+  }
+  const entry = failures.get(key);
+  if (!entry || entry.resetAt <= now)
+    failures.set(key, { count: 1, resetAt: now + FAILURE_WINDOW_MS });
+  else entry.count += 1;
+}
 
 export async function POST(req: Request) {
   let conn: Awaited<ReturnType<typeof createSingleMySQLConnection>> | undefined;
@@ -40,6 +74,15 @@ export async function POST(req: Request) {
       return NextResponse.json(
         { success: false, error: "Please enter both email and password." },
         { status: 400 },
+      );
+    }
+
+    const key = attemptKey(req, email);
+    const now = Date.now();
+    if (isLockedOut(key, now)) {
+      return NextResponse.json(
+        { success: false, error: "Too many failed attempts. Please try again in 15 minutes." },
+        { status: 429 },
       );
     }
 
@@ -62,24 +105,21 @@ export async function POST(req: Request) {
       is_deleted: number;
     }>;
 
-    if (!userList || userList.length === 0 || !userList[0]) {
-      return NextResponse.json({ success: false, error: INVALID_LOGIN }, { status: 401 });
-    }
+    const user = userList?.[0];
 
-    const user = userList[0];
-
+    // Async compare: compareSync blocked every other request for ~80 ms per attempt
     let isMatch = false;
-    if (user.password_hash) {
-      try {
-        isMatch = bcrypt.compareSync(password, user.password_hash);
-      } catch {
-        isMatch = false;
-      }
+    try {
+      isMatch = await bcrypt.compare(password, user?.password_hash || DUMMY_HASH);
+    } catch {
+      isMatch = false;
     }
 
-    if (!isMatch) {
+    if (!user || !isMatch) {
+      recordFailure(key, now);
       return NextResponse.json({ success: false, error: INVALID_LOGIN }, { status: 401 });
     }
+    failures.delete(key);
 
     // Checked after the password, so only the account owner learns it is suspended
     if (user.status && user.status !== "Active") {

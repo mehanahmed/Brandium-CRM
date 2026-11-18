@@ -150,14 +150,14 @@ export function AdminEditUserInfoModal({ open, onOpenChange, user }: AdminEditUs
                 {availableRoles.length > 0 ? (
                   availableRoles.map((r) => (
                     <SelectItem key={r.id} value={r.name.toUpperCase()}>
-                      {r.name.toUpperCase()} {r.is_system ? "(System)" : "(Custom)"}
+                      {r.name.toUpperCase()}
                     </SelectItem>
                   ))
                 ) : (
                   <>
-                    <SelectItem value="AGENT">AGENT (System)</SelectItem>
-                    <SelectItem value="ARTIST">ARTIST (System)</SelectItem>
-                    <SelectItem value="ADMIN">ADMIN (System)</SelectItem>
+                    <SelectItem value="AGENT">AGENT</SelectItem>
+                    <SelectItem value="ARTIST">ARTIST</SelectItem>
+                    <SelectItem value="ADMIN">ADMIN</SelectItem>
                   </>
                 )}
               </SelectContent>

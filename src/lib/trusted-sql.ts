@@ -6,9 +6,10 @@
 
 export const PROSPECT_IDS_SQL = "SELECT `id` FROM `prospects` ORDER BY `created_at` DESC;";
 
+// Runs unscoped, so it returns no contact details of leads the caller cannot see
 export const PROSPECT_PHONE_MATCH_SQL = `
       SELECT
-        p.id, p.contact_name, p.business_name, p.phone, p.alternative_phone,
+        p.id,
         COALESCE(st.name, p.stage_id, 'Prospect') AS stage_name,
         COALESCE(prof_agent.full_name, u_agent.name, 'Unassigned') AS assigned_agent_name,
         p.created_at

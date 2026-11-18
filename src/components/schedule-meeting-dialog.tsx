@@ -112,12 +112,18 @@ export function ScheduleMeetingDialog({
 
   const createMutation = useMutation({
     mutationFn: createMeeting,
-    onSuccess: (_data, meeting) => {
+    onSuccess: (saved, meeting) => {
       queryClient.invalidateQueries({ queryKey: ["meetings"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       queryClient.invalidateQueries({ queryKey: ["prospects"] });
       queryClient.invalidateQueries({ queryKey: ["prospects-stats"] });
-      toast.success("Meeting scheduled successfully!");
+      if (saved.sms_error) {
+        toast.warning("Meeting scheduled, but the SMS was not sent.", {
+          description: saved.sms_error,
+        });
+      } else {
+        toast.success("Meeting scheduled successfully!");
+      }
       onOpenChange(false);
       if (onSuccess) onSuccess(meeting);
     },

@@ -1,5 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
-import { runMySQLQuery } from "@/lib/mysql-api";
+import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "@/lib/mysql-api";
 import { generateUUID, getMySQLTimestamp } from "@/lib/mysql-client";
 import { sendSms } from "@/lib/sms";
 
@@ -202,7 +202,10 @@ export async function fetchMeetingById(id: string): Promise<Meeting | null> {
   return meetings.find((m) => m.id === id) || null;
 }
 
-export async function createMeeting(input: CreateMeetingInput): Promise<Meeting> {
+/** `sms_error` is set when "Send SMS now" was ticked but the gateway did not send it. */
+export async function createMeeting(
+  input: CreateMeetingInput,
+): Promise<Meeting & { sms_error: string | null }> {
   const newId = generateUUID();
   const now = getMySQLTimestamp();
   const timeStr = input.meeting_time
@@ -230,7 +233,8 @@ export async function createMeeting(input: CreateMeetingInput): Promise<Meeting>
       scheduledAt,
       input.assigned_user_id || null,
       input.notes || null,
-      input.send_sms_now ? 1 : 0,
+      // Set by sendMeetingReminderSms below, only after the gateway accepted the SMS
+      0,
       now,
       now,
     ],
@@ -294,27 +298,36 @@ export async function createMeeting(input: CreateMeetingInput): Promise<Meeting>
     }
   }
 
-  const meeting = await fetchMeetingById(newId);
-  if (!meeting) {
-    return {
-      id: newId,
-      title: input.title,
-      prospect_id: input.prospect_id ?? null,
-      phone: input.phone ?? null,
-      location: input.location ?? null,
-      meeting_type: input.meeting_type,
-      meeting_date: input.meeting_date,
-      meeting_time: input.meeting_time,
-      assigned_user_id: input.assigned_user_id ?? null,
-      notes: input.notes ?? null,
-      status: "Scheduled",
-      sms_sent: Boolean(input.send_sms_now),
-      created_by: null,
-      created_at: now,
-      updated_at: now,
-    };
+  // The meeting is saved either way; a failed SMS is reported, not thrown, so it is not booked twice
+  let smsError: string | null = null;
+  if (input.send_sms_now) {
+    try {
+      await sendMeetingReminderSms(newId);
+    } catch (err) {
+      smsError = err instanceof Error ? err.message : "The SMS could not be sent.";
+    }
   }
-  return meeting;
+
+  const meeting = await fetchMeetingById(newId);
+  if (meeting) return { ...meeting, sms_error: smsError };
+  return {
+    sms_error: smsError,
+    id: newId,
+    title: input.title,
+    prospect_id: input.prospect_id ?? null,
+    phone: input.phone ?? null,
+    location: input.location ?? null,
+    meeting_type: input.meeting_type,
+    meeting_date: input.meeting_date,
+    meeting_time: input.meeting_time,
+    assigned_user_id: input.assigned_user_id ?? null,
+    notes: input.notes ?? null,
+    status: "Scheduled",
+    sms_sent: Boolean(input.send_sms_now) && !smsError,
+    created_by: null,
+    created_at: now,
+    updated_at: now,
+  };
 }
 
 export async function updateMeeting(id: string, updates: UpdateMeetingInput): Promise<Meeting> {
@@ -369,7 +382,7 @@ export async function updateMeeting(id: string, updates: UpdateMeetingInput): Pr
 
   params.push(id);
   const sql = `UPDATE \`meetings\` SET ${sets.join(", ")} WHERE \`id\` = ?;`;
-  await runMySQLQuery(sql, params);
+  await runMySQLWrite(sql, params);
 
   const updated = await fetchMeetingById(id);
   if (!updated) throw new Error("Meeting not found");
@@ -406,10 +419,10 @@ export async function sendMeetingReminderSms(
 
 export async function deleteMeeting(id: string): Promise<{ success: boolean; message: string }> {
   const existing = await fetchMeetingById(id);
-  await runMySQLQuery("DELETE FROM `meetings` WHERE `id` = ?;", [id]);
+  await runMySQLWriteOne("DELETE FROM `meetings` WHERE `id` = ?;", [id]);
 
   const now = getMySQLTimestamp();
-  await runMySQLQuery(
+  await runMySQLWrite(
     `INSERT INTO \`activities\` (\`id\`, \`message\`, \`activity_type\`, \`created_at\`)
      VALUES (?, ?, 'meeting_deleted', ?);`,
     [

@@ -33,6 +33,7 @@ import { useSeesAllData } from "@/lib/use-data-scope";
 import { useAuth } from "@/lib/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -203,6 +204,7 @@ export default function MeetingsPage() {
   const { user, isAdmin } = useAuth();
 
   const [search, setSearch] = useState("");
+  const [cancelTarget, setCancelTarget] = useState<Meeting | null>(null);
   const [meetingTypeFilter, setMeetingTypeFilter] = useState<MeetingType | "all">("all");
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
@@ -677,9 +679,7 @@ export default function MeetingsPage() {
                                     Completed
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
-                                    onClick={() =>
-                                      statusMutation.mutate({ id: m.id, status: "Cancelled" })
-                                    }
+                                    onClick={() => setCancelTarget(m)}
                                     className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
                                   >
                                     <XCircle className="mr-2 h-4 w-4 text-destructive" /> Mark
@@ -840,6 +840,28 @@ export default function MeetingsPage() {
         onDeleteMeeting={(m) => {
           setEditingMeeting(null);
           handleOpenDeleteModal(m);
+        }}
+      />
+
+      <ConfirmActionDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => !open && setCancelTarget(null)}
+        title="Cancel this meeting?"
+        description={
+          <>
+            <span className="font-semibold">{cancelTarget?.title}</span> will be marked Cancelled.
+            The client is not notified automatically.
+          </>
+        }
+        confirmLabel="Yes, cancel meeting"
+        destructive
+        pending={statusMutation.isPending}
+        onConfirm={() => {
+          if (!cancelTarget) return;
+          statusMutation.mutate(
+            { id: cancelTarget.id, status: "Cancelled" },
+            { onSettled: () => setCancelTarget(null) },
+          );
         }}
       />
 

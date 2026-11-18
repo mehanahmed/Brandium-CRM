@@ -3,7 +3,7 @@ import { getMySQLConfig } from "./mysql-client";
 import { getMySQLPool } from "./mysql-server";
 import { ensureMySQLTablesExist } from "./auth.functions";
 
-async function ensureBootstrapped() {
+export async function ensureBootstrapped() {
   const pool = await getMySQLPool();
   const config = getMySQLConfig();
   const conn = await pool.getConnection();
@@ -148,6 +148,46 @@ function resolveMissingColumnTarget(
   return { table: table === alias || aliasMatch ? table : null, column };
 }
 
+/** mysql2 result → plain, serializable rows; writes become `[{ affectedRows, insertId }]`. */
+export function toQueryResponse(rows: unknown): UniversalQueryResponse {
+  if (Array.isArray(rows)) {
+    const plainRows: UniversalQueryResultRow[] = rows.map((r) => {
+      const plain: UniversalQueryResultRow = {};
+      if (r && typeof r === "object") {
+        for (const key of Object.keys(r)) {
+          const val = (r as Record<string, unknown>)[key];
+          if (val === null || val === undefined) {
+            plain[key] = null;
+          } else if (val instanceof Date) {
+            plain[key] = val.toISOString().slice(0, 19).replace("T", " ");
+          } else if (
+            typeof val === "number" ||
+            typeof val === "boolean" ||
+            typeof val === "string"
+          ) {
+            plain[key] = val;
+          } else {
+            plain[key] = String(val);
+          }
+        }
+      }
+      return plain;
+    });
+    return { success: true, data: plainRows };
+  }
+
+  const ok = (rows ?? {}) as { affectedRows?: number; insertId?: number };
+  return {
+    success: true,
+    data: [
+      {
+        affectedRows: typeof ok.affectedRows === "number" ? ok.affectedRows : 0,
+        insertId: typeof ok.insertId === "number" ? ok.insertId : 0,
+      },
+    ],
+  };
+}
+
 export const executeMySQLQueryFn = createServerFn({ method: "POST" })
   .validator(
     (input: {
@@ -198,42 +238,7 @@ export const executeMySQLQueryFn = createServerFn({ method: "POST" })
         }
       }
 
-      if (Array.isArray(rows)) {
-        const plainRows: UniversalQueryResultRow[] = rows.map((r) => {
-          const plain: UniversalQueryResultRow = {};
-          if (r && typeof r === "object") {
-            for (const key of Object.keys(r)) {
-              const val = (r as Record<string, unknown>)[key];
-              if (val === null || val === undefined) {
-                plain[key] = null;
-              } else if (val instanceof Date) {
-                plain[key] = val.toISOString().slice(0, 19).replace("T", " ");
-              } else if (
-                typeof val === "number" ||
-                typeof val === "boolean" ||
-                typeof val === "string"
-              ) {
-                plain[key] = val;
-              } else {
-                plain[key] = String(val);
-              }
-            }
-          }
-          return plain;
-        });
-        return { success: true, data: plainRows };
-      }
-
-      const ok = (rows ?? {}) as { affectedRows?: number; insertId?: number };
-      return {
-        success: true,
-        data: [
-          {
-            affectedRows: typeof ok.affectedRows === "number" ? ok.affectedRows : 0,
-            insertId: typeof ok.insertId === "number" ? ok.insertId : 0,
-          },
-        ],
-      };
+      return toQueryResponse(rows);
     } catch (err: unknown) {
       const errObj = err as { message?: string };
       console.error("executeMySQLQueryFn error:", errObj?.message);

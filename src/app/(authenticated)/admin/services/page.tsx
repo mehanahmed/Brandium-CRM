@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -67,6 +68,10 @@ function renderServiceIcon(iconName: string) {
 export default function AdminServicesPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState<string>("");
+  const [deactivateServiceTarget, setDeactivateServiceTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [modalState, setModalState] = useState<{
     open: boolean;
     service: CrmService | null;
@@ -305,15 +310,7 @@ export default function AdminServicesPage() {
                           className="h-7 w-7 p-0 text-slate-400 hover:text-red-600 hover:bg-red-50"
                           title="Soft-delete (Set Inactive to protect history)"
                           disabled={softDeleteMutation.isPending}
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `Set "${srv.name}" to inactive? Historical invoices and deals referencing this service will be preserved.`,
-                              )
-                            ) {
-                              softDeleteMutation.mutate(srv.id);
-                            }
-                          }}
+                          onClick={() => setDeactivateServiceTarget(srv)}
                         >
                           <Trash2 className="size-3.5" />
                         </Button>
@@ -331,6 +328,27 @@ export default function AdminServicesPage() {
         open={modalState.open}
         onOpenChange={(open) => setModalState((prev) => ({ ...prev, open }))}
         service={modalState.service}
+      />
+
+      <ConfirmActionDialog
+        open={deactivateServiceTarget !== null}
+        onOpenChange={(open) => !open && setDeactivateServiceTarget(null)}
+        title="Set this service to inactive?"
+        description={
+          <>
+            <span className="font-semibold">{deactivateServiceTarget?.name}</span> will be hidden
+            from new orders. Historical invoices and deals keep this service.
+          </>
+        }
+        confirmLabel="Yes, set inactive"
+        destructive
+        pending={softDeleteMutation.isPending}
+        onConfirm={() => {
+          if (!deactivateServiceTarget) return;
+          softDeleteMutation.mutate(deactivateServiceTarget.id, {
+            onSettled: () => setDeactivateServiceTarget(null),
+          });
+        }}
       />
     </div>
   );

@@ -45,67 +45,62 @@ export function useCreateFollowUp() {
       const dueLabel = format(new Date(input.due_at), "dd MMM yyyy, hh:mm a");
       const historyId = generateUUID();
 
+      // Resolve "Follow-up" stage ID from MySQL
+      const stageRes = await runMySQLQuery<Record<string, unknown>[]>(
+        "SELECT `id` FROM `stages` WHERE LOWER(TRIM(`name`)) LIKE '%follow%' LIMIT 1;",
+      );
+      const followUpStageId =
+        stageRes?.success && stageRes.data?.[0] ? String(stageRes.data[0]["id"]) : "follow-up";
+
+      // Get prospect's current stage for transition history
+      let fromStageId: string | null = null;
       try {
-        // Resolve "Follow-up" stage ID from MySQL
-        const stageRes = await runMySQLQuery<Record<string, unknown>[]>(
-          "SELECT `id` FROM `stages` WHERE LOWER(TRIM(`name`)) LIKE '%follow%' LIMIT 1;",
+        const currRes = await runMySQLQuery<Record<string, unknown>[]>(
+          "SELECT `stage_id` FROM `prospects` WHERE `id` = ? LIMIT 1;",
+          [input.prospect_id],
         );
-        const followUpStageId =
-          stageRes?.success && stageRes.data?.[0] ? String(stageRes.data[0]["id"]) : "follow-up";
-
-        // Get prospect's current stage for transition history
-        let fromStageId: string | null = null;
-        try {
-          const currRes = await runMySQLQuery<Record<string, unknown>[]>(
-            "SELECT `stage_id` FROM `prospects` WHERE `id` = ? LIMIT 1;",
-            [input.prospect_id],
-          );
-          if (currRes?.success && currRes.data?.[0]) {
-            fromStageId = String(currRes.data[0]["stage_id"] || "") || null;
-          }
-        } catch {
-          // ignore
+        if (currRes?.success && currRes.data?.[0]) {
+          fromStageId = String(currRes.data[0]["stage_id"] || "") || null;
         }
-
-        // Update prospect stage to Follow-up
-        await runMySQLQuery(
-          "UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;",
-          [followUpStageId, now, input.prospect_id],
-        );
-
-        // The follow-up itself is stored on this stage history row
-        await runMySQLQuery(
-          `INSERT INTO \`prospect_stage_history\` (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`changed_by\`, \`note\`, \`changed_at\`, \`follow_up_due_at\`, \`follow_up_assigned_to\`, \`follow_up_status\`)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending');`,
-          [
-            historyId,
-            input.prospect_id,
-            fromStageId,
-            followUpStageId,
-            input.created_by,
-            `Follow-up scheduled for ${dueLabel}${input.note ? ` — ${input.note}` : ""}`,
-            now,
-            getMySQLTimestamp(new Date(input.due_at)),
-            input.assigned_to,
-          ],
-        );
-
-        // Activity log
-        await runMySQLQuery(
-          `INSERT INTO \`activities\` (\`id\`, \`prospect_id\`, \`actor_id\`, \`activity_type\`, \`message\`, \`created_at\`)
-           VALUES (?, ?, ?, 'follow_up_created', ?, ?);`,
-          [
-            generateUUID(),
-            input.prospect_id,
-            input.created_by,
-            `New follow-up task scheduled for ${dueLabel}${input.note ? ` — ${input.note}` : ""}`,
-            now,
-          ],
-        );
-      } catch (err) {
-        console.warn("useCreateFollowUp MySQL notice:", err);
+      } catch {
+        // ignore
       }
 
+      // The follow-up itself is stored on this stage history row
+      await runMySQLWrite(
+        `INSERT INTO \`prospect_stage_history\` (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`changed_by\`, \`note\`, \`changed_at\`, \`follow_up_due_at\`, \`follow_up_assigned_to\`, \`follow_up_status\`)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending');`,
+        [
+          historyId,
+          input.prospect_id,
+          fromStageId,
+          followUpStageId,
+          input.created_by,
+          `Follow-up scheduled for ${dueLabel}${input.note ? ` — ${input.note}` : ""}`,
+          now,
+          getMySQLTimestamp(new Date(input.due_at)),
+          input.assigned_to,
+        ],
+      );
+
+      // Only after the follow-up row is saved, so a failed save never leaves the lead moved
+      await runMySQLWrite(
+        "UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;",
+        [followUpStageId, now, input.prospect_id],
+      );
+
+      // Activity log
+      await runMySQLQuery(
+        `INSERT INTO \`activities\` (\`id\`, \`prospect_id\`, \`actor_id\`, \`activity_type\`, \`message\`, \`created_at\`)
+           VALUES (?, ?, ?, 'follow_up_created', ?, ?);`,
+        [
+          generateUUID(),
+          input.prospect_id,
+          input.created_by,
+          `New follow-up task scheduled for ${dueLabel}${input.note ? ` — ${input.note}` : ""}`,
+          now,
+        ],
+      );
       return { id: historyId, prospect_id: input.prospect_id };
     },
     onSuccess: (data) => {

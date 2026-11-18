@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -85,6 +86,9 @@ export default function AdminUsersPage() {
   const { user, startViewAs } = useAuth();
 
   const [search, setSearch] = useState<string>("");
+  const [deleteUserTarget, setDeleteUserTarget] = useState<{ id: string; name: string } | null>(
+    null,
+  );
   const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Inactive">("Active");
   const [resetPasswordModal, setResetPasswordModal] = useState<{
     open: boolean;
@@ -433,22 +437,18 @@ export default function AdminUsersPage() {
                                 </DropdownMenuItem>
                               )}
                             </DropdownMenuGroup>
-                            <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
-                            <DropdownMenuItem
-                              disabled={softDeleteMutation.isPending}
-                              onClick={() => {
-                                if (
-                                  confirm(
-                                    `Delete account for ${u.name}? They will not be able to log in.`,
-                                  )
-                                ) {
-                                  softDeleteMutation.mutate(u.id);
-                                }
-                              }}
-                              className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4 text-destructive" /> Delete User
-                            </DropdownMenuItem>
+                            {u.role !== "ADMIN" && (
+                              <>
+                                <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-muted" />
+                                <DropdownMenuItem
+                                  disabled={softDeleteMutation.isPending}
+                                  onClick={() => setDeleteUserTarget(u)}
+                                  className="cursor-pointer text-destructive focus:text-destructive text-sm gap-2 rounded-md px-2 py-1.5"
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4 text-destructive" /> Delete User
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -490,6 +490,27 @@ export default function AdminUsersPage() {
       <AdminChangeOwnPasswordModal
         open={changeOwnPasswordOpen}
         onOpenChange={setChangeOwnPasswordOpen}
+      />
+
+      <ConfirmActionDialog
+        open={deleteUserTarget !== null}
+        onOpenChange={(open) => !open && setDeleteUserTarget(null)}
+        title="Delete this account?"
+        description={
+          <>
+            <span className="font-semibold">{deleteUserTarget?.name}</span> will not be able to log
+            in. Their records stay in the system.
+          </>
+        }
+        confirmLabel="Yes, delete account"
+        destructive
+        pending={softDeleteMutation.isPending}
+        onConfirm={() => {
+          if (!deleteUserTarget) return;
+          softDeleteMutation.mutate(deleteUserTarget.id, {
+            onSettled: () => setDeleteUserTarget(null),
+          });
+        }}
       />
     </div>
   );

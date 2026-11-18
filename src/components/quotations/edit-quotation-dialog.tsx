@@ -323,6 +323,7 @@ export function EditQuotationDialog({
       created_at: toMySQLDateTime(createdAt),
       notes: buildQuotationNotes(orderNotes, specialClientDiscount, orderItems),
       terms: termsToSave(termsText),
+      expected_updated_at: quotation.updated_at,
     });
   };
 

@@ -71,6 +71,7 @@ import {
   getContrastTextColor,
   ordersQueryOptions,
   requiresStatusReason,
+  requiresStageLink,
   resolveOrderStatus,
   useAssignStageMutation,
   useOrderStages,
@@ -82,8 +83,10 @@ import {
 import { CreateOrderDialog } from "@/components/orders/create-order-dialog";
 import { EditOrderDialog } from "@/components/orders/edit-order-dialog";
 import { DateRangePicker3 } from "@/components/dashboard/date-range-picker3";
-import { AssignStageDialog, getInitials } from "@/components/orders/assign-stage-dialog";
+import { getInitials } from "@/components/orders/assign-stage-dialog";
+import { StageAssignFlow } from "@/components/orders/stage-assign-flow";
 import { StatusReasonDialog } from "@/components/orders/status-reason-dialog";
+import { FootageLinkDialog } from "@/components/orders/footage-link-dialog";
 import { useSeesAllData } from "@/lib/use-data-scope";
 
 const ITEMS_PER_PAGE = 25;
@@ -291,6 +294,8 @@ export default function OrdersPage() {
                         <TableCell className="pl-6">
                           <Link
                             href={`/track/${order.order_number}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="font-semibold text-[#67B239] hover:text-[#5aa030] dark:text-[#7ac142] hover:underline"
                           >
                             {order.order_number}
@@ -367,7 +372,7 @@ export default function OrdersPage() {
                                       onSelect={() =>
                                         st.assignable
                                           ? setStageAssign({ order, statusId: st.id })
-                                          : requiresStatusReason(st.id)
+                                          : requiresStatusReason(st.id) || requiresStageLink(st.id)
                                             ? setReasonTarget({ order, statusId: st.id })
                                             : updateStatusMutation.mutate({
                                                 order,
@@ -390,12 +395,20 @@ export default function OrdersPage() {
                                 </DropdownMenuSubContent>
                               </DropdownMenuSub>
                               <DropdownMenuItem asChild className="cursor-pointer">
-                                <Link href={`/track/${order.order_number}`}>
+                                <Link
+                                  href={`/track/${order.order_number}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
                                   <Eye className="mr-2 h-4 w-4" /> View Details
                                 </Link>
                               </DropdownMenuItem>
                               <DropdownMenuItem asChild className="cursor-pointer">
-                                <Link href={`/track/${order.order_number}?print=1`}>
+                                <Link
+                                  href={`/track/${order.order_number}?print=1`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
                                   <Download className="mr-2 h-4 w-4" /> Invoice
                                 </Link>
                               </DropdownMenuItem>
@@ -517,7 +530,9 @@ export default function OrdersPage() {
           onSave={async (data) => {
             const result = await saveOrderMutation.mutateAsync(data);
             setIsCreateOpen(false);
-            if (result.order_number) router.push(`/track/${result.order_number}`);
+            if (result.order_number) {
+              window.open(`/track/${result.order_number}`, "_blank", "noopener,noreferrer");
+            }
           }}
           isSaving={saveOrderMutation.isPending}
         />
@@ -538,7 +553,22 @@ export default function OrdersPage() {
         />
       )}
 
-      {reasonTarget && (
+      {reasonTarget && requiresStageLink(reasonTarget.statusId) && (
+        <FootageLinkDialog
+          key={`${reasonTarget.order.id}-${reasonTarget.statusId}`}
+          order={reasonTarget.order}
+          statusId={reasonTarget.statusId}
+          isSaving={updateStatusMutation.isPending}
+          onCancel={() => setReasonTarget(null)}
+          onConfirm={(link) =>
+            updateStatusMutation.mutate(
+              { ...reasonTarget, changedByName, link },
+              { onSuccess: () => setReasonTarget(null) },
+            )
+          }
+        />
+      )}
+      {reasonTarget && !requiresStageLink(reasonTarget.statusId) && (
         <StatusReasonDialog
           key={`${reasonTarget.order.id}-${reasonTarget.statusId}`}
           order={reasonTarget.order}
@@ -555,20 +585,21 @@ export default function OrdersPage() {
       )}
 
       {stageAssign && (
-        <AssignStageDialog
+        <StageAssignFlow
           key={`${stageAssign.order.id}-${stageAssign.statusId}`}
           open
           onOpenChange={(open) => !open && setStageAssign(null)}
           order={stageAssign.order}
           statusId={stageAssign.statusId}
           users={users}
-          onAssign={async (assignee) => {
+          onAssign={async (assignee, deadline) => {
             await assignStageMutation.mutateAsync({
               order: stageAssign.order,
               statusId: stageAssign.statusId,
               assigneeId: assignee.id,
               assigneeName: assignee.name,
               changedByName,
+              deadline,
             });
             setStageAssign(null);
           }}

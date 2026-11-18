@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -22,6 +23,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { CrmUser } from "@/lib/admin-users";
 import { resolveOrderStatus, type CrmOrder } from "@/lib/orders";
@@ -33,7 +35,8 @@ interface AssignStageDialogProps {
   /** Assignable stage the order is moving into (or re-assigning). */
   statusId: string;
   users: CrmUser[];
-  onAssign: (assignee: CrmUser) => Promise<void>;
+  /** `deadline` is an ISO time when the admin set one, otherwise null. */
+  onAssign: (assignee: CrmUser, deadline: string | null) => Promise<void>;
   isSaving: boolean;
 }
 
@@ -59,6 +62,14 @@ export function AssignStageDialog({
   const stage = resolveOrderStatus(statusId);
   const isReassign = resolveOrderStatus(order.status).id === stage.id;
   const [selectedDrId, setSelectedDrId] = useState(isReassign ? order.designer_id || "" : "");
+  // Optional stage deadline as a datetime-local value; empty means no deadline and no progress bar
+  const [deadline, setDeadline] = useState("");
+  // Earliest pickable deadline: start of today (local), so previous days are disabled
+  const earliestDeadline = useMemo(() => {
+    const today = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}T00:00`;
+  }, []);
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
 
   const designerReps = useMemo(
@@ -101,63 +112,120 @@ export function AssignStageDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (selected) await onAssign(selected);
+    if (!selected) return;
+    const deadlineDate = deadline ? new Date(deadline) : null;
+    if (deadlineDate && Number.isNaN(deadlineDate.getTime())) {
+      toast.error("Invalid deadline", { description: "Pick a valid date and time." });
+      return;
+    }
+    if (deadlineDate && deadline < earliestDeadline) {
+      toast.error("Invalid deadline", { description: "The deadline cannot be a previous day." });
+      return;
+    }
+    await onAssign(selected, deadlineDate ? deadlineDate.toISOString() : null);
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Assign {stage.name}</DialogTitle>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader className="space-y-1.5">
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            Assign {stage.name}
+            {stageRole && (
+              <span className="rounded-md bg-[#67B239]/15 px-2 py-0.5 text-xs font-semibold text-[#55962e] dark:text-[#7ac142]">
+                {stageRole}
+              </span>
+            )}
+          </DialogTitle>
           <DialogDescription>
-            Choose who handles the <span className="font-semibold">{stage.name}</span> stage for
-            order <span className="font-semibold">{order.order_number}</span> (
-            <span className="font-semibold">{order.company_name}</span>). The order status will be
-            set to: <span className="font-semibold">{stage.name}</span>.
+            The order moves to <span className="font-semibold text-foreground">{stage.name}</span>{" "}
+            and the selected person takes it on.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          <div className="grid gap-4 py-4">
-            <div className="space-y-1">
-              <Label>Assign To</Label>
-              <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    role="combobox"
-                    aria-expanded={isPopoverOpen}
-                    className="w-full justify-between"
-                    disabled={stageTeam.length === 0}
-                  >
-                    <span className="truncate">
-                      {selected ? selected.name : "Select a user..."}
+
+        <div className="flex items-center justify-between gap-3 rounded-lg border bg-slate-50 px-3 py-2.5 text-sm dark:bg-slate-900/60">
+          <span className="font-semibold text-foreground">{order.order_number}</span>
+          <span className="truncate text-muted-foreground">{order.company_name}</span>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="space-y-2">
+            <Label>Assign to</Label>
+            <Popover open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={isPopoverOpen}
+                  className="h-auto min-h-10 w-full justify-between px-3 py-2"
+                  disabled={stageTeam.length === 0}
+                >
+                  {selected ? (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <Avatar className="h-6 w-6 shrink-0">
+                        <AvatarImage src={selected.avatar_url || undefined} alt={selected.name} />
+                        <AvatarFallback className="text-xs">
+                          {getInitials(selected.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="truncate">{selected.name}</span>
                     </span>
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
-                  <Command>
-                    <CommandInput placeholder="Search user..." />
-                    <CommandList>
-                      <CommandEmpty>No user found.</CommandEmpty>
-                      <CommandGroup
-                        heading={stageRole ? `${stage.name} (${stageRole})` : undefined}
-                      >
-                        {stageTeam.map(renderUser)}
-                      </CommandGroup>
-                      {stageRole && stageTeam.length === 0 && (
-                        <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                          No user has the {stageRole} role yet. Set it in Users.
-                        </p>
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </div>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      {stageTeam.length === 0 ? "No one available" : "Select a user..."}
+                    </span>
+                  )}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-(--radix-popover-trigger-width) p-0">
+                <Command>
+                  <CommandInput placeholder="Search user..." />
+                  <CommandList>
+                    <CommandEmpty>No user found.</CommandEmpty>
+                    <CommandGroup heading={stageRole ? `${stage.name} (${stageRole})` : undefined}>
+                      {stageTeam.map(renderUser)}
+                    </CommandGroup>
+                    {stageRole && stageTeam.length === 0 && (
+                      <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                        No user has the {stageRole} role yet. Set it in Users.
+                      </p>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
-          <DialogFooter className="pt-4 border-t gap-2">
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="stage-deadline">Deadline (optional)</Label>
+              {deadline && (
+                <button
+                  type="button"
+                  onClick={() => setDeadline("")}
+                  className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <Input
+              id="stage-deadline"
+              type="datetime-local"
+              min={earliestDeadline}
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              disabled={isSaving}
+              className="h-10"
+            />
+            <p className="text-xs text-muted-foreground">
+              Progress is shown on the card only when a deadline is set.
+            </p>
+          </div>
+
+          <DialogFooter className="gap-2 border-t pt-4">
             <Button
               type="button"
               variant="outline"
@@ -169,7 +237,7 @@ export function AssignStageDialog({
             <Button
               type="submit"
               disabled={isSaving || !selected}
-              className="bg-[#67B239] hover:bg-[#5aa030] text-white"
+              className="bg-[#67B239] text-white hover:bg-[#5aa030]"
             >
               {isSaving ? (
                 <>

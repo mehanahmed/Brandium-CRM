@@ -4,8 +4,23 @@ import { memo, useEffect, useState } from "react";
 import Link from "next/link";
 import { useDraggable } from "@dnd-kit/core";
 import { differenceInSeconds, format, formatDistanceToNowStrict, isAfter } from "date-fns";
-import { Building2, CalendarDays, Phone, ReceiptText, Star } from "lucide-react";
+import {
+  Building2,
+  CalendarDays,
+  MoreVertical,
+  Phone,
+  ReceiptText,
+  ScrollText,
+  Star,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Card, CardContent } from "@/components/ui/card";
+import { ProjectDetailsDialog } from "@/components/projects/project-details-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -45,12 +60,20 @@ const formatDurationPrecise = (totalSeconds: number): string => {
   return minutes > 0 ? `${minutes}m` : "<1m";
 };
 
-const formatSlaHours = (hours: number): string => {
-  const d = Math.floor(hours / 24);
-  const h = hours % 24;
-  if (h === 0) return d === 1 ? "1 Day SLA" : `${d} Days SLA`;
-  if (d === 0) return h === 1 ? "1 Hour SLA" : `${h} Hours SLA`;
-  return `${d}d ${h}H SLA`;
+/** SLA label with proper singular/plural and capital first letter: "1 Hour SLA", "5 Hours SLA". */
+const formatSlaMinutes = (totalMinutes: number): string => {
+  const minutes = Math.max(0, Math.round(totalMinutes));
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const months = Math.floor(days / 30);
+  const years = Math.floor(days / 365);
+  const unit = (count: number, singular: string, plural: string) =>
+    `${count} ${count === 1 ? singular : plural} SLA`;
+  if (years >= 1) return unit(years, "Year", "Years");
+  if (months >= 1) return unit(months, "Month", "Months");
+  if (days >= 1) return unit(days, "Day", "Days");
+  if (hours >= 1) return unit(hours, "Hour", "Hours");
+  return unit(minutes, "Minute", "Minutes");
 };
 
 interface ProgressInfo {
@@ -62,27 +85,39 @@ interface ProgressInfo {
 }
 
 /**
- * ERPAPP stage SLA: with a delivery date the remaining time is split evenly across the
- * working stages; otherwise each stage gets DEFAULT_STAGE_SLA_HOURS.
+ * Stage progress: only when an admin set a deadline in the assign dialog.
  */
+/**
+ * Bar fill from green at the start to red at the current point: the hue slides from 120 (green)
+ * at 0% down to 0 (red) at 100%, so a fuller bar ends redder.
+ */
+const progressGradient = (percentage: number): string => {
+  const t = Math.min(100, Math.max(0, percentage)) / 100;
+  const endHue = Math.round((1 - t) * 120);
+  return `linear-gradient(to right, hsl(120 70% 42%), hsl(${endHue} 75% 45%))`;
+};
+
 const calculateProgressInfo = (order: CrmOrder, now: Date): ProgressInfo => {
   // A canceled order has no running SLA, so it shows no progress bar
   const deadline =
     resolveOrderStatus(order.status).id === "canceled" ? null : getStageDeadline(order);
   if (!deadline) {
-    const deliveredAt = getStageStartedAt(order);
+    // No deadline set: no progress bar. Delivered orders show their delivery date instead.
+    const isDelivered = resolveOrderStatus(order.status).id === "delivered";
     return {
       showProgressBar: false,
       percentage: 100,
       displayText: "",
       isOverdue: false,
-      targetLabel: format(new Date(deliveredAt), "d MMM yyyy"),
+      targetLabel: isDelivered
+        ? format(new Date(getStageStartedAt(order)), "d MMM yyyy")
+        : "Not set",
     };
   }
 
-  const { start: stageStart, target, slaHours } = deadline;
+  const { start: stageStart, target, slaMinutes } = deadline;
 
-  const sla = ` (${formatSlaHours(slaHours)})`;
+  const sla = ` (${formatSlaMinutes(slaMinutes)})`;
   if (isAfter(now, target)) {
     return {
       showProgressBar: true,
@@ -131,6 +166,11 @@ function ProjectCardComponent({
   });
 
   const dragging = !isOverlay && (isDragging || isDndDragging);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // Same dot as Motion Box: shows on the menu when a requirements brief is filled
+  const hasDetails = Object.values(order.script_writer_brief ?? {}).some(
+    (value) => value.trim().length > 0,
+  );
 
   const [progressInfo, setProgressInfo] = useState<ProgressInfo>(() =>
     calculateProgressInfo(order, new Date()),
@@ -149,215 +189,260 @@ function ProjectCardComponent({
   const truncatedName = name.length > 35 ? `${name.substring(0, 35)}...` : name;
 
   return (
-    <div
-      ref={!isOverlay ? setNodeRef : null}
-      {...(!isOverlay ? { ...attributes, ...listeners } : {})}
-      className={cn(
-        "relative group transition-all duration-150 select-none",
-        dragging && "opacity-40",
-        isOverlay && "cursor-grabbing shadow-2xl scale-105 rotate-1 z-10 pointer-events-none",
-      )}
-    >
-      <Card
+    <>
+      <div
+        ref={!isOverlay ? setNodeRef : null}
+        {...(!isOverlay ? { ...attributes, ...listeners } : {})}
         className={cn(
-          "bg-card w-full py-0 shadow-xs transition-shadow",
-          !isOverlay && "cursor-grab active:cursor-grabbing hover:shadow-md",
-          isOverlay && "ring-2 ring-[#67B239] shadow-2xl bg-card/95 backdrop-blur-sm",
+          "relative group transition-all duration-150 select-none",
+          dragging && "opacity-40",
+          isOverlay && "cursor-grabbing shadow-2xl scale-105 rotate-1 z-10 pointer-events-none",
         )}
       >
-        <CardContent className="p-3 space-y-2.5">
-          <div className="flex justify-between items-start">
-            <span className="text-sm font-semibold text-foreground truncate">
-              {order.order_number}
-            </span>
+        <Card
+          className={cn(
+            "bg-card w-full py-0 shadow-xs transition-shadow",
+            !isOverlay && "cursor-grab active:cursor-grabbing hover:shadow-md",
+            isOverlay && "ring-2 ring-[#67B239] shadow-2xl bg-card/95 backdrop-blur-sm",
+          )}
+        >
+          <CardContent className="p-3 space-y-2.5">
+            <div className="flex justify-between items-start gap-1">
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                {order.order_number}
+              </span>
+              <Link
+                href={`/track/${order.order_number}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-muted"
+                onClick={(e) => e.stopPropagation()}
+                title="View Invoice / Order Details"
+                draggable={false}
+              >
+                <ReceiptText className="h-4 w-4 text-muted-foreground hover:text-[#67B239]" />
+              </Link>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                    className="relative inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-[#67B239]"
+                    title="More actions"
+                    aria-label="More actions"
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                    {hasDetails && (
+                      <span
+                        className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-[#67B239]"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    onSelect={() => setDetailsOpen(true)}
+                  >
+                    <ScrollText className="mr-2 h-4 w-4" />
+                    Project Details
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            <div className="space-y-1">
+              <p
+                className="flex items-center gap-1.5 text-xs font-medium text-foreground"
+                title={name}
+              >
+                <Building2 className="size-3.5 shrink-0 text-[#67B239]" />
+                <span className="truncate">{truncatedName}</span>
+              </p>
+              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Phone className="size-3.5 shrink-0 text-[#67B239]" />
+                {order.phone ? (
+                  <a
+                    href={`tel:${order.phone}`}
+                    onClick={(e) => e.stopPropagation()}
+                    draggable={false}
+                    className="font-mono hover:text-[#67B239] hover:underline"
+                  >
+                    {order.phone}
+                  </a>
+                ) : (
+                  <span className="italic">No phone</span>
+                )}
+              </p>
+            </div>
+
             <Link
               href={`/track/${order.order_number}`}
-              className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-muted"
+              target="_blank"
+              rel="noopener noreferrer"
               onClick={(e) => e.stopPropagation()}
-              title="View Invoice / Order Details"
+              title="View Tracking Page"
               draggable={false}
             >
-              <ReceiptText className="h-4 w-4 text-muted-foreground hover:text-[#67B239]" />
+              <div
+                className={cn(
+                  "inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold transition-colors",
+                  isDelivered
+                    ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/30"
+                    : "border-destructive/30 bg-destructive/20 text-destructive hover:bg-destructive/30",
+                )}
+              >
+                <CalendarDays className="mr-1.5 h-3 w-3" />
+                {isDelivered ? "Delivered" : "Target"}: {progressInfo.targetLabel}
+              </div>
             </Link>
-          </div>
 
-          <div className="space-y-1">
-            <p
-              className="flex items-center gap-1.5 text-xs font-medium text-foreground"
-              title={name}
-            >
-              <Building2 className="size-3.5 shrink-0 text-[#67B239]" />
-              <span className="truncate">{truncatedName}</span>
-            </p>
-            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Phone className="size-3.5 shrink-0 text-[#67B239]" />
-              {order.phone ? (
-                <a
-                  href={`tel:${order.phone}`}
-                  onClick={(e) => e.stopPropagation()}
-                  draggable={false}
-                  className="font-mono hover:text-[#67B239] hover:underline"
-                >
-                  {order.phone}
-                </a>
-              ) : (
-                <span className="italic">No phone</span>
-              )}
-            </p>
-          </div>
-
-          <Link
-            href={`/track/${order.order_number}`}
-            onClick={(e) => e.stopPropagation()}
-            title="View Tracking Page"
-            draggable={false}
-          >
-            <div
-              className={cn(
-                "inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold transition-colors",
-                isDelivered
-                  ? "border-emerald-500/30 bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/30"
-                  : "border-destructive/30 bg-destructive/20 text-destructive hover:bg-destructive/30",
-              )}
-            >
-              <CalendarDays className="mr-1.5 h-3 w-3" />
-              {isDelivered ? "Delivered" : "Target"}: {progressInfo.targetLabel}
-            </div>
-          </Link>
-
-          {progressInfo.showProgressBar && (
-            <div className="pt-1">
-              <div className="flex items-center space-x-2 mb-1">
-                <StopwatchIcon className="h-4 w-4 text-[#67B239] shrink-0" />
-                <span
-                  className="text-xs font-medium text-muted-foreground truncate"
-                  title={progressInfo.displayText}
-                >
-                  {progressInfo.displayText}
-                </span>
-              </div>
-              <div className="h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 shadow-inner overflow-hidden">
-                <div
-                  className={cn(
-                    "h-full rounded-full transition-all",
-                    progressInfo.isOverdue
-                      ? "bg-destructive"
-                      : "bg-linear-to-r from-[#67B239] to-[#0a2e5c]",
-                  )}
-                  style={{ width: `${progressInfo.percentage}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="flex items-center justify-start mt-2">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
+            {progressInfo.showProgressBar && (
+              <div className="pt-1">
+                <div className="flex items-center space-x-2 mb-1">
+                  <StopwatchIcon className="h-4 w-4 text-[#67B239] shrink-0" />
+                  <span
+                    className="text-xs font-medium text-muted-foreground truncate"
+                    title={progressInfo.displayText}
+                  >
+                    {progressInfo.displayText}
+                  </span>
+                </div>
+                <div className="h-2.5 w-full rounded-full bg-slate-200 dark:bg-slate-800 shadow-inner overflow-hidden">
                   <div
                     className={cn(
-                      "hover:bg-muted/50 p-1 -m-1 rounded-md transition-colors",
-                      status.assignable && !order.designer_name && "cursor-pointer",
+                      "h-full rounded-full transition-all",
+                      progressInfo.isOverdue && "bg-destructive",
                     )}
-                    onClick={
-                      status.assignable && !order.designer_name
-                        ? (e) => {
-                            e.stopPropagation();
-                            onAssign(order);
-                          }
-                        : undefined
-                    }
-                  >
-                    <Avatar className="h-7 w-7 text-xs border bg-muted">
-                      <AvatarImage src={order.crm_user_avatar || undefined} alt="CRM" />
-                      <AvatarFallback className="text-muted-foreground font-semibold">
-                        {getInitials(order.crm_user_name)}
-                      </AvatarFallback>
-                    </Avatar>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  <p>CRM: {order.crm_user_name || "N/A"}</p>
-                  {status.assignable && !order.designer_name && (
-                    <p className="text-xs">(Click to assign {status.name})</p>
-                  )}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            {order.designer_name && (
-              <>
-                <div className="w-px h-5 bg-border mx-1.5" />
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div
-                        className={cn(
-                          "hover:bg-muted/50 p-1 -m-1 rounded-md transition-colors",
-                          status.assignable && "cursor-pointer",
-                        )}
-                        onClick={
-                          status.assignable
-                            ? (e) => {
-                                e.stopPropagation();
-                                onAssign(order);
-                              }
-                            : undefined
-                        }
-                      >
-                        <Avatar className="h-7 w-7 text-xs border border-[#67B239] bg-muted">
-                          <AvatarImage
-                            src={order.designer_avatar || undefined}
-                            alt={order.designer_name}
-                          />
-                          <AvatarFallback className="text-[#55962e] font-semibold">
-                            {getInitials(order.designer_name)}
-                          </AvatarFallback>
-                        </Avatar>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      <p>Assigned: {order.designer_name}</p>
-                      {status.assignable && (
-                        <p className="text-xs">(Click to re-assign {status.name})</p>
-                      )}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </>
-            )}
-
-            {order.is_starred > 0 && (
-              <div
-                className="ml-auto flex items-center gap-0.5 shrink-0"
-                title={`${order.is_starred.toFixed(1)} Stars Priority`}
-              >
-                {[1, 2, 3, 4, 5].map((starIndex) => {
-                  const isFull = order.is_starred >= starIndex;
-                  const isHalf = !isFull && order.is_starred >= starIndex - 0.5;
-                  return (
-                    <div key={starIndex} className="relative shrink-0">
-                      {isFull ? (
-                        <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
-                      ) : isHalf ? (
-                        <div className="relative">
-                          <Star className="h-3.5 w-3.5 text-muted-foreground/30" />
-                          <div className="absolute top-0 left-0 overflow-hidden w-1/2 h-full">
-                            <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
-                          </div>
-                        </div>
-                      ) : (
-                        <Star className="h-3.5 w-3.5 text-muted-foreground/30" />
-                      )}
-                    </div>
-                  );
-                })}
+                    style={{
+                      width: `${progressInfo.percentage}%`,
+                      ...(progressInfo.isOverdue
+                        ? {}
+                        : { background: progressGradient(progressInfo.percentage) }),
+                    }}
+                  />
+                </div>
               </div>
             )}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
+
+            <div className="flex items-center justify-start mt-2">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div
+                      className={cn(
+                        "hover:bg-muted/50 p-1 -m-1 rounded-md transition-colors",
+                        status.assignable && !order.designer_name && "cursor-pointer",
+                      )}
+                      onClick={
+                        status.assignable && !order.designer_name
+                          ? (e) => {
+                              e.stopPropagation();
+                              onAssign(order);
+                            }
+                          : undefined
+                      }
+                    >
+                      <Avatar className="h-7 w-7 text-xs border bg-muted">
+                        <AvatarImage src={order.crm_user_avatar || undefined} alt="CRM" />
+                        <AvatarFallback className="text-muted-foreground font-semibold">
+                          {getInitials(order.crm_user_name)}
+                        </AvatarFallback>
+                      </Avatar>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    <p>CRM: {order.crm_user_name || "N/A"}</p>
+                    {status.assignable && !order.designer_name && (
+                      <p className="text-xs">(Click to assign {status.name})</p>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+
+              {order.designer_name && (
+                <>
+                  <div className="w-px h-5 bg-border mx-1.5" />
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div
+                          className={cn(
+                            "hover:bg-muted/50 p-1 -m-1 rounded-md transition-colors",
+                            status.assignable && "cursor-pointer",
+                          )}
+                          onClick={
+                            status.assignable
+                              ? (e) => {
+                                  e.stopPropagation();
+                                  onAssign(order);
+                                }
+                              : undefined
+                          }
+                        >
+                          <Avatar className="h-7 w-7 text-xs border border-[#67B239] bg-muted">
+                            <AvatarImage
+                              src={order.designer_avatar || undefined}
+                              alt={order.designer_name}
+                            />
+                            <AvatarFallback className="text-[#55962e] font-semibold">
+                              {getInitials(order.designer_name)}
+                            </AvatarFallback>
+                          </Avatar>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        <p>Assigned: {order.designer_name}</p>
+                        {status.assignable && (
+                          <p className="text-xs">(Click to re-assign {status.name})</p>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </>
+              )}
+
+              {order.is_starred > 0 && (
+                <div
+                  className="ml-auto flex items-center gap-0.5 shrink-0"
+                  title={`${order.is_starred.toFixed(1)} Stars Priority`}
+                >
+                  {[1, 2, 3, 4, 5].map((starIndex) => {
+                    const isFull = order.is_starred >= starIndex;
+                    const isHalf = !isFull && order.is_starred >= starIndex - 0.5;
+                    return (
+                      <div key={starIndex} className="relative shrink-0">
+                        {isFull ? (
+                          <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+                        ) : isHalf ? (
+                          <div className="relative">
+                            <Star className="h-3.5 w-3.5 text-muted-foreground/30" />
+                            <div className="absolute top-0 left-0 overflow-hidden w-1/2 h-full">
+                              <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+                            </div>
+                          </div>
+                        ) : (
+                          <Star className="h-3.5 w-3.5 text-muted-foreground/30" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+      {!isOverlay && (
+        <ProjectDetailsDialog open={detailsOpen} onOpenChange={setDetailsOpen} order={order} />
+      )}
+    </>
   );
 }
 

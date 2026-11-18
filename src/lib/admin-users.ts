@@ -228,6 +228,10 @@ export async function softDeleteCrmUser(userId: string): Promise<boolean> {
   if (user?.email === "admin@example.com" || user?.email === "agent@brandium.com") {
     throw new Error("System default accounts cannot be deleted.");
   }
+  // An admin account cannot be deleted by another admin (or by itself)
+  if (user && String(user.role || "").toUpperCase() === "ADMIN") {
+    throw new Error("Admin accounts cannot be deleted.");
+  }
 
   const now = getMySQLTimestamp();
   await runMySQLQuery(

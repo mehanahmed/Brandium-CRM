@@ -220,6 +220,8 @@ export function ChangeStageDialog({
   const [activityToDelete, setActivityToDelete] = useState<{
     historyId: string;
     noteIndex: number;
+    noteId: string | null;
+    noteText: string;
   } | null>(null);
   const [isDeletingActivity, setIsDeletingActivity] = useState(false);
 
@@ -297,7 +299,7 @@ export function ChangeStageDialog({
       notes: string;
       isInitial?: boolean;
       /** Set only for a note inside a stage history row; only those can be deleted here. */
-      note?: { historyId: string; noteIndex: number };
+      note?: { historyId: string; noteIndex: number; noteId: string | null; noteText: string };
     }> = [];
 
     const rawHistory = historyQuery.data ?? [];
@@ -317,7 +319,7 @@ export function ChangeStageDialog({
             timestamp: pn.createdAt || h.changed_at,
             changedByUserName: pn.createdByName || actorName,
             notes: tagged ? (tagged[2] ?? "") : pn.text,
-            note: { historyId: h.id, noteIndex },
+            note: { historyId: h.id, noteIndex, noteId: pn.id ?? null, noteText: pn.text },
           });
         }
       } else {
@@ -414,6 +416,8 @@ export function ChangeStageDialog({
         prospectId: target.id,
         historyId: activityToDelete.historyId,
         noteIndex: activityToDelete.noteIndex,
+        noteId: activityToDelete.noteId,
+        noteText: activityToDelete.noteText,
       });
       if (!removed) throw new Error("Activity was not removed");
       toast.success("Activity removed from log.");

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 // Node needs the .ts extension, tsc refuses it in a static import
 const scopeModule = "./sql-scope.ts";
-const { isAdminOnlySql, scopeSqlForUser, SqlScopeError } = (await import(
+const { isAdminOnlySql, scopeSqlForUser, SqlScopeError, writeTargetOf } = (await import(
   scopeModule
 )) as typeof import("./sql-scope");
 
@@ -18,6 +18,13 @@ for (const sql of [
   assert.equal(isAdminOnlySql(sql), true, sql);
 }
 assert.equal(isAdminOnlySql("SELECT id, updated_at FROM users"), false);
+// REPLACE() is a string function used by company-table reads (stage history joins users)
+assert.equal(
+  isAdminOnlySql(
+    "SELECT COALESCE(REPLACE(s.id, '-', '_')) AS x FROM prospect_stage_history sh JOIN users u ON u.id = sh.changed_by",
+  ),
+  false,
+);
 
 const me = "u-1";
 const scoped = (sql: string) => scopeSqlForUser(sql, me);
@@ -65,6 +72,32 @@ refused("SHOW TABLES");
 refused("SET @x = 1");
 refused("PREPARE s FROM 'SELECT * FROM orders'");
 refused("SELECT * FROM orders WHERE (1");
+
+// Audit bypasses (all passed before): file write, hidden comment, MySQL 8 TABLE statement
+refused("SELECT * FROM stages INTO/**/OUTFILE 'C:/xampp/htdocs/x.php'");
+refused("SELECT * FROM stages INTO DUMPFILE '/tmp/x'");
+refused("SELECT * --\x01'\nFROM orders -- '");
+refused("SELECT * FROM stages UNION TABLE orders");
+// Password hashes cannot come back under another name: users is read through safe columns
+const unionUsers = scoped("SELECT 1,2,3,4,5,6,7,8,9,10,11 UNION ALL SELECT * FROM users");
+assert.match(
+  unionUsers,
+  /\(SELECT id, name, email, role, status, .* FROM `users` WHERE \(TRUE\)\)/,
+);
+assert.doesNotMatch(unionUsers, /password_hash|SELECT \* FROM `users`/);
+
+// Setup tables: admin-only, or (stages/services) checked by permission in the route
+assert.equal(isAdminOnlySql("DELETE FROM followup_stages"), true);
+assert.equal(writeTargetOf("UPDATE LOW_PRIORITY `stages` SET name = 'x'"), "stages");
+assert.equal(writeTargetOf("DELETE FROM services WHERE id = 1"), "services");
+assert.equal(writeTargetOf("INSERT IGNORE INTO stages (id) VALUES (1)"), "stages");
+assert.equal(writeTargetOf("SELECT * FROM stages"), null);
+refused("UPDATE services s, stages t SET t.name = 'x'");
+// Profiles: everyone reads all, but writes only their own row
+assert.match(
+  scoped("UPDATE profiles SET full_name = 'CEO' WHERE id = 'usr-admin-1'"),
+  /WHERE \(id = 'u-1'\) AND \( id = 'usr-admin-1'\)/,
+);
 assert.equal(scoped("SELECT 1 -- FROM orders"), "SELECT 1  ");
 
 // "All users' data" in Role Management: only the role's unscoped tables are read in full

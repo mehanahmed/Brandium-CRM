@@ -13,9 +13,10 @@ import { escape } from "mysql2";
 export class SqlScopeError extends Error {}
 
 const PROTECTED_TABLES =
-  /\b(users|user_roles|roles|permissions|role_permissions|sms_gateway_settings|sessions|order_stage_positions)\b/i;
-// Word boundary, not whitespace: `UPDATE`users`` and `UPDATE/**/users` are writes too
-const WRITE_SQL = /\b(insert|update|delete|replace)\b/i;
+  /\b(users|user_roles|roles|permissions|role_permissions|sms_gateway_settings|sessions|order_stage_positions|followup_stages|tenants|memberships|schema_migrations)\b/i;
+// Word boundary, not whitespace: `UPDATE`users`` and `UPDATE/**/users` are writes too.
+// `REPLACE(` is the string function (read), so REPLACE only counts when it starts a statement.
+const WRITE_SQL = /\b(insert|update|delete)\b|\breplace\s+(into\b|[`\w])/i;
 const ADMIN_ONLY_SQL =
   /\b(alter|drop|truncate|rename|grant|revoke)\s|\bcreate\s+(table|database|index|user|view|trigger|procedure|function|event)\b|\binto\s+(out|dump)file\b|\bload_file\b|\bload\s+data\b|password_hash/i;
 
@@ -27,6 +28,18 @@ const ADMIN_ONLY_SQL =
  */
 export const isAdminOnlySql = (sql: string) =>
   ADMIN_ONLY_SQL.test(sql) || (WRITE_SQL.test(sql) && PROTECTED_TABLES.test(sql));
+
+// Non-admins read these tables only through a fixed column list, so secrets cannot come back
+// under another name (e.g. `SELECT 1,2,... UNION SELECT * FROM users` returning password_hash).
+// The columns are the ones ensureMySQLTablesExist() always creates.
+const SAFE_COLUMNS: Record<string, string> = {
+  users:
+    "id, name, email, role, status, avatar_url, phone, is_deleted, deleted_at, created_at, updated_at",
+};
+
+// Words a non-admin statement never needs: file writes (`INTO OUTFILE`), file reads, and the
+// MySQL 8 `TABLE x` / `HANDLER x` statements that read a table without a FROM.
+const BANNED_WORDS = new Set(["outfile", "dumpfile", "load_file", "table", "handler"]);
 
 /** Never readable by non-admins (secrets and internal bookkeeping). */
 const DENIED_TABLES = new Set([
@@ -67,17 +80,31 @@ function scopeRules(userId: string): Record<string, string> {
     payments: `recorded_by = ${me} OR prospect_id IN (${myProspects})`,
     expenses: `recorded_by = ${me}`,
     sms_logs: `sent_by = ${me}`,
+    // Every row, but only SAFE_COLUMNS (writes to users are admin-only: PROTECTED_TABLES)
+    users: "TRUE",
   };
+}
+
+/** Rows a non-admin may change in tables everyone may read in full (e.g. other users' names). */
+function writeOnlyRules(userId: string): Record<string, string> {
+  return { profiles: `id = ${escape(userId)}` };
 }
 
 type Token = { kind: "space" | "word" | "ident" | "string" | "punct"; text: string };
 
 // Order matters: executable comments (refused), plain comments (dropped), strings, `idents`, words.
 // Assumes the server default sql_mode (backslash escapes on, "..." is a string).
+// Whitespace is ASCII only, as in MySQL: JS `\s` also matches Unicode spaces, which MySQL does
+// not treat as space, so `--` + U+00A0 must not start a comment here either.
 const LEXER =
-  /(\s+)|(\/\*M?!)|(--(?=\s|$)[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|('(?:\\[\s\S]|''|[^\\'])*'|"(?:\\[\s\S]|""|[^\\"])*")|(`(?:``|[^`])*`)|([A-Za-z0-9_$@]+)|([\s\S])/gy;
+  /([ \t\n\r\f\v]+)|(\/\*M?!)|(--(?=[ \t\n\r\f\v]|$)[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)|('(?:\\[\s\S]|''|[^\\'])*'|"(?:\\[\s\S]|""|[^\\"])*")|(`(?:``|[^`])*`)|([A-Za-z0-9_$@]+)|([\s\S])/gy;
+
+// MySQL also starts a `--` comment before a control character; nothing legitimate sends one
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
 
 function tokenize(sql: string): Token[] {
+  if (CONTROL_CHARS.test(sql)) throw new SqlScopeError("Control characters are not allowed.");
   const tokens: Token[] = [];
   LEXER.lastIndex = 0;
   let m: RegExpExecArray | null;
@@ -123,6 +150,8 @@ export function scopeSqlForUser(
   const rules = scopeRules(userId);
   for (const table of unscopedTables) delete rules[table];
   const tokens = tokenize(sql);
+  if (tokens.some((t) => t.kind === "word" && BANNED_WORDS.has(t.text.toLowerCase())))
+    throw new SqlScopeError("This statement is not allowed.");
   const sig = tokens.flatMap((t, i) => (t.kind === "space" ? [] : [i]));
   const at = (k: number) => (sig[k] === undefined ? undefined : tokens[sig[k]!]);
 
@@ -170,7 +199,7 @@ export function scopeSqlForUser(
       const aliasAs = word(next) === "as";
       tokens[sig[k]!] = {
         kind: "punct",
-        text: `(SELECT * FROM \`${name}\` WHERE (${rule}))${hasAlias || aliasAs ? "" : ` AS ${t.text}`}`,
+        text: `(SELECT ${SAFE_COLUMNS[name] ?? "*"} FROM \`${name}\` WHERE (${rule}))${hasAlias || aliasAs ? "" : ` AS ${t.text}`}`,
       };
       continue;
     }
@@ -198,8 +227,31 @@ export function scopeSqlForUser(
     }
   }
   if (depth !== 0) throw new SqlScopeError("Unbalanced parentheses.");
-  limitWriteToOwnRows(first, tokens, sig, rules);
+  limitWriteToOwnRows(first, tokens, sig, { ...writeOnlyRules(userId), ...rules });
   return tokens.map((t) => t.text).join("");
+}
+
+/** The table a write statement changes (top level), or null for a read. */
+export function writeTargetOf(sql: string): string | null {
+  const tokens = tokenize(sql).filter((t) => t.kind !== "space");
+  const first = word(tokens[0]);
+  const top: Token[] = [];
+  let depth = 0;
+  for (const t of tokens) {
+    if (t.text === "(") depth++;
+    else if (t.text === ")") depth--;
+    else if (depth === 0) top.push(t);
+  }
+  let i = 1;
+  if (first === "insert" || first === "replace" || first === "update") {
+    while (MODIFIERS.has(word(top[i]))) i++;
+    if (first !== "update" && word(top[i]) === "into") i++;
+  } else if (first === "delete") {
+    i = top.findIndex((t) => word(t) === "from") + 1;
+    if (i === 0) return null;
+  } else return null;
+  const t = top[i];
+  return t && (t.kind === "word" || t.kind === "ident") ? tableName(t) : null;
 }
 
 /**
@@ -250,9 +302,10 @@ function limitWriteToOwnRows(
   }
   const name = tableAt(i);
   const rule = rules[name];
-  if (!rule) return;
   i++;
-  // Optional alias, then the statement must go straight on (no JOIN, comma or USING)
+  // Optional alias, then the statement must go straight on (no JOIN, comma or USING).
+  // Checked for every table: `UPDATE services s, stages t SET t.name = ...` would otherwise
+  // change a second table that the permission check never saw.
   const nextWord = top[i]?.w ?? "";
   if (top[i] && nextWord !== "set" && nextWord !== "where" && top[i]!.text !== ";") {
     const isAlias = nextWord === "as" || !NOT_ALIAS.has(nextWord);
@@ -263,6 +316,7 @@ function limitWriteToOwnRows(
   const allowedNext = first === "update" ? ["set"] : ["where", "order", "limit"];
   if (after && !allowedNext.includes(after.w) && after.text !== ";")
     throw new SqlScopeError(`Multi-table ${first.toUpperCase()} is not allowed.`);
+  if (!rule) return;
 
   const where = top.find((x, j) => j >= i && x.w === "where");
   const tail = top.find((x, j) => j >= i && (x.w === "order" || x.w === "limit" || x.text === ";"));
