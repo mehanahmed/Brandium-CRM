@@ -44,6 +44,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { runMySQLQuery } from "@/lib/mysql-api";
 import { invoiceBgUrl, useAppSettings } from "@/lib/app-settings";
+import { useUserName } from "@/lib/user-names";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 
@@ -402,6 +403,8 @@ const getTimelineBadgeStyles = (status: string, isLatest: boolean) => {
 export default function ProjectInvoicePage() {
   // Letterhead chosen in Admin → Settings (falls back to the built-in one)
   const { data: appSettings } = useAppSettings();
+  // Current names by user id (saved names go stale when a user is renamed)
+  const nameOf = useUserName();
   const params = useParams();
   const router = useRouter();
   const rawParam = params ? params["invoiceid"] : undefined;
@@ -765,7 +768,11 @@ export default function ProjectInvoicePage() {
           amount: Number(p.amount) || 0,
           paymentMethod: p.paymentMethod || p.method || "Advance Payment",
           notes: p.notes || p.ref || "",
-          recordedBy: p.recordedByUserName || project.creator_name || project.agent_name || "Agent",
+          recordedBy:
+            nameOf(p.recordedByUserId, p.recordedByUserName) ||
+            project.creator_name ||
+            project.agent_name ||
+            "Agent",
         });
       });
     } else if (rawNotes.includes("[Payments:")) {
@@ -783,7 +790,10 @@ export default function ProjectInvoicePage() {
                 paymentMethod: p.paymentMethod || p.method || "Advance Payment",
                 notes: p.notes || p.ref || "",
                 recordedBy:
-                  p.recordedByUserName || project.creator_name || project.agent_name || "Agent",
+                  nameOf(p.recordedByUserId, p.recordedByUserName) ||
+                  project.creator_name ||
+                  project.agent_name ||
+                  "Agent",
               });
             });
           }
@@ -855,7 +865,7 @@ export default function ProjectInvoicePage() {
       amountDue: due,
       isPaid: paid,
     };
-  }, [project]);
+  }, [project, nameOf]);
 
   // Barcode Generation
   const codeToRender = String(project?.project_code || invoiceIdParam || "JOB-00000");

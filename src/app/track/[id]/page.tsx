@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { invoiceBgUrl, useAppSettings } from "@/lib/app-settings";
+import { useUserName } from "@/lib/user-names";
 import { useAuth } from "@/lib/auth";
 import { crmUsersQueryOptions, type CrmUser } from "@/lib/admin-users";
 import {
@@ -109,6 +110,8 @@ export default function OrderTrackPage() {
     orderCommentsQueryOptions(signedIn ? order?.id : undefined),
   );
   const { data: usersData } = useQuery({ ...crmUsersQueryOptions(), enabled: signedIn });
+  // Current names by user id (saved names go stale on rename); public visitors get none
+  const nameOf = useUserName(signedIn);
   const usersById = useMemo(() => {
     const map = new Map<string, CrmUser>();
     ((usersData as CrmUser[]) || []).forEach((u) => map.set(u.id, u));
@@ -153,10 +156,10 @@ export default function OrderTrackPage() {
   useEffect(() => {
     if (!order || autoPrintedRef.current || searchParams?.get("print") !== "1") return;
     autoPrintedRef.current = true;
-    printSalesPdf(orderToPdfData(order)).catch((err) =>
+    printSalesPdf(orderToPdfData(order, nameOf)).catch((err) =>
       console.error("Invoice PDF print failed:", err),
     );
-  }, [order, searchParams]);
+  }, [order, searchParams, nameOf]);
 
   if (isLoading) {
     return (
@@ -241,6 +244,7 @@ export default function OrderTrackPage() {
 
   const renderComment = (comment: OrderComment, isReply = false, parentCommentId?: string) => {
     const author = comment.user_id ? usersById.get(comment.user_id) : undefined;
+    const authorName = nameOf(comment.user_id, comment.user_name);
     const visibleReplies = repliesByParent[comment.id] || [];
     const isExpanded = expandedReplies[comment.id] || false;
     const repliesToRender =
@@ -255,15 +259,15 @@ export default function OrderTrackPage() {
         className={cn("flex space-x-2.5 sm:space-x-3", isReply && "ml-8 sm:ml-10")}
       >
         <Avatar className="h-9 w-9 sm:h-10 sm:w-10 border-2 border-[#67B239]/30 shadow-xs shrink-0 mt-0.5">
-          <AvatarImage src={author?.avatar_url || undefined} alt={comment.user_name} />
+          <AvatarImage src={author?.avatar_url || undefined} alt={authorName} />
           <AvatarFallback className="bg-[#67B239]/10 text-[#55962e] text-xs font-semibold">
-            {getInitials(comment.user_name)}
+            {getInitials(authorName)}
           </AvatarFallback>
         </Avatar>
         <div className="flex-1">
           <div className="bg-muted dark:bg-muted/60 px-3.5 py-2.5 rounded-xl shadow-xs transition-colors border border-transparent hover:border-[#67B239]/30">
             <div className="flex items-baseline space-x-1.5">
-              <p className="text-sm font-semibold text-foreground">{comment.user_name}</p>
+              <p className="text-sm font-semibold text-foreground">{authorName}</p>
               {comment.user_role && (
                 <span className="text-xs text-muted-foreground">({comment.user_role})</span>
               )}
@@ -279,12 +283,12 @@ export default function OrderTrackPage() {
                   opening
                     ? {
                         parentId: isReply && parentCommentId ? parentCommentId : comment.id,
-                        targetName: comment.user_name,
+                        targetName: authorName,
                         formUnderId: comment.id,
                       }
                     : null,
                 );
-                setCurrentReplyText(opening ? `@${comment.user_name.replace(/\s+/g, "")} ` : "");
+                setCurrentReplyText(opening ? `@${authorName.replace(/\s+/g, "")} ` : "");
                 if (opening) {
                   // Put the caret after the prefilled @mention
                   setTimeout(() => {
@@ -415,7 +419,7 @@ export default function OrderTrackPage() {
           ) : (
             <span />
           )}
-          <SalesPdfActions getData={() => orderToPdfData(order)} />
+          <SalesPdfActions getData={() => orderToPdfData(order, nameOf)} />
         </div>
 
         {/* Current Status header */}
@@ -438,7 +442,7 @@ export default function OrderTrackPage() {
               </h3>
               <div className="text-xs text-muted-foreground mt-2">
                 {lastStatusEntry
-                  ? `Last status update: ${formatDate(lastStatusEntry.timestamp, true)}${lastStatusEntry.changedByUserName ? ` by ${lastStatusEntry.changedByUserName}` : ""}`
+                  ? `Last status update: ${formatDate(lastStatusEntry.timestamp, true)}${nameOf(lastStatusEntry.changedByUserId, lastStatusEntry.changedByUserName) ? ` by ${nameOf(lastStatusEntry.changedByUserId, lastStatusEntry.changedByUserName)}` : ""}`
                   : "Status pending."}
               </div>
             </div>
@@ -662,7 +666,8 @@ export default function OrderTrackPage() {
                                 {record.notes || "N/A"}
                               </TableCell>
                               <TableCell className="text-xs text-muted-foreground whitespace-nowrap py-2 px-3">
-                                {record.recordedByUserName || "N/A"}
+                                {nameOf(record.recordedByUserId, record.recordedByUserName) ||
+                                  "N/A"}
                               </TableCell>
                             </TableRow>
                           ))}
@@ -845,9 +850,9 @@ export default function OrderTrackPage() {
                             <CalendarDays className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 opacity-70 shrink-0" />
                             {formatDate(entry.timestamp, false)}
                             <span className="mx-1.5 hidden sm:inline">&bull;</span>
-                            {entry.changedByUserName && (
+                            {nameOf(entry.changedByUserId, entry.changedByUserName) && (
                               <span className="block sm:inline w-full sm:w-auto mt-0.5 sm:mt-0">
-                                {entry.changedByUserName}
+                                {nameOf(entry.changedByUserId, entry.changedByUserName)}
                               </span>
                             )}
                           </div>

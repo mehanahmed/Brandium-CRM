@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { getInitials } from "@/components/orders/assign-stage-dialog";
 import type { DashboardDateRange } from "@/lib/dashboard";
 import { resolveOrderStatus, type CrmOrder } from "@/lib/orders";
+import { useUserName } from "@/lib/user-names";
 
 // The list scrolls inside the card; cap keeps the DOM small
 const MAX_ROWS = 50;
@@ -28,6 +29,8 @@ export function ProjectAssignmentsList({
   /** Admin user filter: orders where the user is the CRM contact or current assignee. */
   filterUserId?: string | undefined;
 }) {
+  // Current names by user id; the note text keeps the name from when it was assigned
+  const nameOf = useUserName();
   const rows = useMemo(() => {
     const list: {
       id: string;
@@ -49,23 +52,24 @@ export function ProjectAssignmentsList({
       for (const entry of order.status_history) {
         const match = ASSIGNED_TO.exec(entry.notes || "");
         const date = new Date(entry.timestamp);
-        if (!match?.[1] || Number.isNaN(date.getTime())) continue;
+        const assignee = nameOf(entry.assignedToUserId, match?.[1]?.trim());
+        if (!match?.[1] || !assignee || Number.isNaN(date.getTime())) continue;
         const day = format(date, "yyyy-MM-dd");
         if ((range.from && day < range.from) || (range.to && day > range.to)) continue;
         const stage = resolveOrderStatus(entry.status);
         list.push({
           id: `${order.id}-${entry.id}`,
-          assignee: match[1].trim(),
+          assignee,
           company: order.company_name || order.job_id || order.order_number,
           stageName: stage.name,
           stageColor: stage.color,
           date,
-          by: entry.changedByUserName,
+          by: nameOf(entry.changedByUserId, entry.changedByUserName),
         });
       }
     }
     return list.sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, MAX_ROWS);
-  }, [orders, range.from, range.to, filterUserId]);
+  }, [orders, range.from, range.to, filterUserId, nameOf]);
 
   if (isLoading) {
     return (

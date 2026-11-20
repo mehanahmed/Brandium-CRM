@@ -759,6 +759,8 @@ export type StageNoteItem = {
   id?: string | undefined;
   text: string;
   createdAt?: string | null | undefined;
+  /** Author's user id; show `nameOf(createdById, createdByName)` (older notes only have the name). */
+  createdById?: string | null | undefined;
   createdByName?: string | null | undefined;
   createdByAvatar?: string | null | undefined;
   noteIndex?: number | undefined;
@@ -803,6 +805,8 @@ export function parseNotesToItems(
                   fallbackAuthor ||
                   null,
                 createdByAvatar: (item["createdByAvatar"] as string) || fallbackAvatar || null,
+                // Kept so re-saving the note array does not drop it
+                createdById: item["createdById"] ? String(item["createdById"]) : null,
               });
             }
           } else if (typeof item === "string" && item.trim()) {
@@ -954,6 +958,7 @@ export async function addStageNote(params: {
     id: generateUUID(),
     text: trimmedNote,
     createdAt: nowStr,
+    createdById: userId || null,
     createdByName: userName || null,
     // A base64 avatar can overflow the TEXT `note` column and corrupt the whole note array
     createdByAvatar: userAvatar && !userAvatar.startsWith("data:") ? userAvatar : null,

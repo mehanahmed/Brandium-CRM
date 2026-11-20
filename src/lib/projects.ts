@@ -620,7 +620,7 @@ export function useUpdateProjectStatusMutation() {
         id: `sh-${Date.now()}`,
         status: payload.stage_name || payload.stage_id,
         timestamp: new Date().toISOString(),
-        changedByUserName: payload.changed_by_name || "Mehan Ahmed",
+        changedByUserName: payload.changed_by_name || "Unknown user",
         notes: payload.notes || `Order moved to stage "${payload.stage_name || payload.stage_id}".`,
         proofUrl: payload.proof_url || null,
       });

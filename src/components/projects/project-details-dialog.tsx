@@ -55,6 +55,7 @@ import {
   type ScriptWriterRequirements,
 } from "@/lib/orders";
 import { cn } from "@/lib/utils";
+import { useUserName } from "@/lib/user-names";
 
 interface ProjectDetailsDialogProps {
   open: boolean;
@@ -136,6 +137,7 @@ function latestStageLink(order: CrmOrder, stage: string) {
         isPdf: (m[1] as string).toUpperCase() === "PDF",
         at: entry.timestamp,
         by: entry.changedByUserName,
+        byId: entry.changedByUserId ?? null,
       };
     }
   }
@@ -328,6 +330,9 @@ function EmptyPanel({
 function StageLinkPanel({ order }: { order: CrmOrder }) {
   const [copied, setCopied] = useState(false);
   const link = latestStageLink(order, FINAL_STAGE);
+  // Current name by user id (the history entry keeps the name from when it was saved)
+  const nameOf = useUserName();
+  const linkBy = link ? nameOf(link.byId, link.by) : "";
   const Icon = SECTION_META.final.icon;
 
   if (!link) {
@@ -383,10 +388,10 @@ function StageLinkPanel({ order }: { order: CrmOrder }) {
               </span>
             </div>
             <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500 dark:text-zinc-400">
-              {link.by && (
+              {linkBy && (
                 <span className="inline-flex items-center gap-1">
                   <UserCheck className="h-3 w-3" />
-                  {link.by}
+                  {linkBy}
                 </span>
               )}
               {link.at && (

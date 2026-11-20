@@ -42,6 +42,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { runMySQLQuery } from "@/lib/mysql-api";
 import { invoiceBgUrl, useAppSettings } from "@/lib/app-settings";
+import { useUserName } from "@/lib/user-names";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { SalesPdfActions } from "@/components/sales/sales-pdf-actions";
@@ -220,6 +221,8 @@ const FALLBACK_DEMO_QUOTATION: QuotationRecord = {
 export default function QuotationDetailPage() {
   // Letterhead chosen in Admin → Settings (falls back to the built-in one)
   const { data: appSettings } = useAppSettings();
+  // Current names by user id (saved names go stale when a user is renamed)
+  const nameOf = useUserName();
   const params = useParams();
   const router = useRouter();
   const rawParam = params ? params["quotationid"] : undefined;
@@ -515,7 +518,10 @@ export default function QuotationDetailPage() {
           paymentMethod: p.paymentMethod || p.method || "Advance Payment",
           notes: p.notes || p.ref || "",
           recordedBy:
-            p.recordedByUserName || quotation.creator_name || quotation.agent_name || "Agent",
+            nameOf(p.recordedByUserId, p.recordedByUserName) ||
+            quotation.creator_name ||
+            quotation.agent_name ||
+            "Agent",
         });
       });
     } else if (rawNotes.includes("[Payments:")) {
@@ -536,7 +542,10 @@ export default function QuotationDetailPage() {
                 paymentMethod: p.paymentMethod || p.method || "Advance Payment",
                 notes: p.notes || p.ref || "",
                 recordedBy:
-                  p.recordedByUserName || quotation.creator_name || quotation.agent_name || "Agent",
+                  nameOf(p.recordedByUserId, p.recordedByUserName) ||
+                  quotation.creator_name ||
+                  quotation.agent_name ||
+                  "Agent",
               });
             });
           }
@@ -607,7 +616,7 @@ export default function QuotationDetailPage() {
       amountDue: due,
       isPaid: paid,
     };
-  }, [quotation]);
+  }, [quotation, nameOf]);
 
   // Barcode Generation
   const codeToRender = String(quotation?.quotation_code || quotationIdParam || "QT-00000");

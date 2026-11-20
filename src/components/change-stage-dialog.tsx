@@ -66,6 +66,7 @@ import {
 } from "@/lib/stages";
 import type { Prospect } from "@/lib/prospects";
 import { useAuth } from "@/lib/auth";
+import { useUserName } from "@/lib/user-names";
 import { runMySQLQuery } from "@/lib/mysql-api";
 import { cn } from "@/lib/utils";
 
@@ -213,6 +214,8 @@ export function ChangeStageDialog({
   const router = useRouter();
   const queryClient = useQueryClient();
   const { user, profile } = useAuth();
+  // Current names by user id (a note saves its author's name, which goes stale on rename)
+  const nameOf = useUserName();
 
   const [activityType, setActivityType] = useState<string>("Follow-up Call");
   const [note, setNote] = useState<string>("");
@@ -317,7 +320,7 @@ export function ChangeStageDialog({
             id: `${h.id}-${pn.id || pn.createdAt || Math.random()}`,
             activity: tagged?.[1] || rawName,
             timestamp: pn.createdAt || h.changed_at,
-            changedByUserName: pn.createdByName || actorName,
+            changedByUserName: nameOf(pn.createdById, pn.createdByName) || actorName,
             notes: tagged ? (tagged[2] ?? "") : pn.text,
             note: { historyId: h.id, noteIndex, noteId: pn.id ?? null, noteText: pn.text },
           });
@@ -355,7 +358,7 @@ export function ChangeStageDialog({
     }
 
     return items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-  }, [historyQuery.data, prospect]);
+  }, [historyQuery.data, prospect, nameOf]);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();

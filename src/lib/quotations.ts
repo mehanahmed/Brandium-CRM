@@ -6,6 +6,7 @@ import { QUOTATION_INSERT_SQL } from "./trusted-sql";
 import { resolveStageIcon, type Stage } from "./stages";
 import { parseTerms } from "@/components/sales/terms-editor";
 import { linkSaleToProspect } from "./prospect-sale-link";
+import { useAuth } from "./auth";
 
 export type QuotationAssignee = {
   id: string;
@@ -607,6 +608,7 @@ export function useUpdateQuotationAssigneesMutation() {
 
 export function useUpdateQuotationStatusMutation() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async (payload: {
@@ -651,6 +653,7 @@ export function useUpdateQuotationStatusMutation() {
           status: payload.stage_name || payload.stage_id,
           timestamp: new Date().toISOString(),
           changedByUserName: payload.changed_by_name || "Unknown user",
+          changedByUserId: user?.id ?? null,
           notes:
             payload.notes ||
             `Quotation moved to stage "${payload.stage_name || payload.stage_id}".`,

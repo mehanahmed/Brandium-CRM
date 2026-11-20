@@ -3,6 +3,7 @@ import JsBarcode from "jsbarcode";
 import { resolveOrderTerms } from "@/lib/orders";
 import type { CrmOrder } from "@/lib/orders";
 import { invoiceBgUrl, type AppSettings } from "@/lib/app-settings";
+import type { NameOf } from "@/lib/user-names";
 
 /** Everything the shared order / quotation PDF needs, already formatted for display. */
 export type SalesPdfData = {
@@ -125,7 +126,8 @@ const formatPdfDate = (value: string | null | undefined, withTime = true) => {
 };
 
 /** Order invoice (`/track/[id]`) → PDF data, with the same totals rules as the page. */
-export function orderToPdfData(order: CrmOrder): SalesPdfData {
+/** `nameOf` shows each payment recorder's current name by user id (saved names go stale). */
+export function orderToPdfData(order: CrmOrder, nameOf?: NameOf): SalesPdfData {
   const subtotal = order.items.reduce(
     (acc, item) => acc + (item.isGift ? 0 : Number(item.lineItemTotalPrice) || 0),
     0,
@@ -195,7 +197,8 @@ export function orderToPdfData(order: CrmOrder): SalesPdfData {
       amount: formatBdt(p.amount),
       method: p.paymentMethod || "N/A",
       notes: p.notes || "N/A",
-      recordedBy: p.recordedByUserName || "N/A",
+      recordedBy:
+        (nameOf ? nameOf(p.recordedByUserId, p.recordedByUserName) : p.recordedByUserName) || "N/A",
     })),
     terms: resolveOrderTerms(order),
     totals,

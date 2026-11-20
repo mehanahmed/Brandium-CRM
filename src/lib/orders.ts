@@ -5,6 +5,7 @@ import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "./mysql-api";
 import { generateUUID, getMySQLTimestamp } from "./mysql-client";
 import { ORDER_INSERT_SQL } from "./trusted-sql";
 import { linkSaleToProspect } from "./prospect-sale-link";
+import { useAuth } from "./auth";
 import type { AdvancePaymentRecord } from "./projects";
 import { parseTerms, resolveTerms } from "@/components/sales/terms-editor";
 
@@ -399,7 +400,10 @@ export interface OrderStatusHistoryEntry {
   id: string;
   status: string;
   timestamp: string;
+  /** Name saved at the time; show `nameOf(changedByUserId, changedByUserName)` instead. */
   changedByUserName: string;
+  /** Who made the change (entries from before this field only have the name). */
+  changedByUserId?: string | null | undefined;
   notes?: string | null | undefined;
   /** Optional ISO deadline for this stage, set in the assign dialog. */
   deadline?: string | null | undefined;
@@ -665,6 +669,7 @@ function notifyNewPayments(orderId: string, payments: AdvancePaymentRecord[]) {
 
 export function useSaveOrderMutation() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   return useMutation({
     mutationFn: async (payload: SaveOrderPayload) => {
       const paid = payload.advance_payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
@@ -738,6 +743,7 @@ export function useSaveOrderMutation() {
           status: ORDER_SUBMITTED_STATUS_ID,
           timestamp: new Date().toISOString(),
           changedByUserName: payload.changed_by_name,
+          changedByUserId: user?.id ?? null,
           notes: "Order created.",
         },
       ];
@@ -793,6 +799,7 @@ async function writeStatusChange(
   notes: string,
   designerId?: string,
   deadline?: string | null,
+  changedById?: string | null,
 ) {
   const history: OrderStatusHistoryEntry[] = [
     ...order.status_history,
@@ -801,6 +808,7 @@ async function writeStatusChange(
       status: statusId,
       timestamp: new Date().toISOString(),
       changedByUserName: changedByName,
+      changedByUserId: changedById ?? null,
       notes,
       deadline: deadline ?? null,
       assignedToUserId: designerId ?? null,
@@ -842,6 +850,7 @@ export function normalizeStageLink(value: string): string | null {
 
 export function useUpdateOrderStatusMutation() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   return useMutation({
     mutationFn: async (p: {
       order: CrmOrder;
@@ -868,7 +877,15 @@ export function useUpdateOrderStatusMutation() {
         // Read back by the project details popup ("Link: <url>" in the move note)
         note = `Order moved to "${status.name}". Link: ${url}`;
       }
-      await writeStatusChange(p.order, p.statusId, p.changedByName, note);
+      await writeStatusChange(
+        p.order,
+        p.statusId,
+        p.changedByName,
+        note,
+        undefined,
+        null,
+        user?.id,
+      );
     },
     onSuccess: (_, p) => {
       invalidateOrders(queryClient);
@@ -881,6 +898,7 @@ export function useUpdateOrderStatusMutation() {
 /** Moves the order into an assignable stage and records who is responsible (`designer_id`). */
 export function useAssignStageMutation() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   return useMutation({
     mutationFn: async (p: {
       order: CrmOrder;
@@ -899,6 +917,7 @@ export function useAssignStageMutation() {
         `Order moved to "${stage.name}" and assigned to ${p.assigneeName}.`,
         p.assigneeId,
         p.deadline ?? null,
+        user?.id,
       );
     },
     onSuccess: (_, p) => {
