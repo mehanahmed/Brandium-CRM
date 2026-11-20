@@ -162,9 +162,19 @@ export async function updateCrmUser(id: string, input: UpdateCrmUserInput): Prom
     throw new Error(`Another user account with email "${input.email}" already exists.`);
   }
 
-  await runMySQLQuery(
+  await runMySQLWrite(
     "UPDATE `users` SET `name` = ?, `email` = ?, `role` = ?, `status` = ?, `updated_at` = ? WHERE `id` = ?;",
     [input.name.trim(), inputEmail, input.role, input.status, now, id],
+  );
+  // Most screens show COALESCE(profiles.full_name, users.name), so the profile must change too.
+  // It was only re-synced from users at server start, so a rename showed the old name until then.
+  // Upsert: an UPDATE that changes nothing reports 0 rows, so "update else insert" could
+  // hit a duplicate key. Renaming already needs admin (non-admins cannot write `users`).
+  await runMySQLWrite(
+    `INSERT INTO \`profiles\` (\`id\`, \`full_name\`, \`email\`, \`created_at\`, \`updated_at\`)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE \`full_name\` = VALUES(\`full_name\`), \`email\` = VALUES(\`email\`), \`updated_at\` = VALUES(\`updated_at\`);`,
+    [id, input.name.trim(), inputEmail, now, now],
   );
 
   const updated = await fetchCrmUserById(id);
