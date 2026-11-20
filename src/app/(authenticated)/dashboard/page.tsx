@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
@@ -70,11 +70,6 @@ import {
   QuotationSummaryCards,
   type QuotationStats,
 } from "@/components/quotations/quotation-summary-cards";
-import {
-  followUpBoardQueryOptions,
-  followUpStageFor,
-  followUpStagesQueryOptions,
-} from "@/lib/follow-ups";
 
 export default function DashboardPage() {
   const { user, isAdmin, role } = useAuth();
@@ -146,32 +141,6 @@ export default function DashboardPage() {
       ? `${((summary.quotations.accepted / summary.quotations.all) * 100).toFixed(1)}%`
       : "0.0%",
   };
-
-  // Follow-up overview: open follow-ups per board column (same user and date rules as the Scheduled follow-ups card)
-  const followUpStages = useQuery(followUpStagesQueryOptions());
-  const followUps = useQuery({
-    ...followUpBoardQueryOptions(userId, isAdmin),
-    enabled: Boolean(userId) && !productionView,
-  });
-  const followUpSteps = useMemo(() => {
-    const stages = followUpStages.data ?? [];
-    const counts = new Map<string, number>();
-    for (const item of followUps.data ?? []) {
-      if (!item.has_follow_up) continue;
-      const day = item.due_at.slice(0, 10);
-      if (range.from && day < range.from) continue;
-      if (range.to && day > range.to) continue;
-      if (filterUserId && ![item.assigned_to, item.created_by].includes(filterUserId)) continue;
-      const stage = followUpStageFor(item.status, stages);
-      if (stage) counts.set(stage.id, (counts.get(stage.id) ?? 0) + 1);
-    }
-    return stages.map((stage) => ({
-      key: stage.id,
-      title: stage.name,
-      color: stage.color,
-      count: counts.get(stage.id) ?? 0,
-    }));
-  }, [followUpStages.data, followUps.data, range.from, range.to, filterUserId]);
 
   const m = metrics.data;
 
@@ -413,13 +382,15 @@ export default function DashboardPage() {
 
       {/* Status timeline overviews (Project, Prospect & Follow-up) */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2 print:hidden">
-        <StatusOverviewCard
-          title="Follow-up Overview"
-          description="Open follow-ups by board stage for the selected period."
-          icon={CalendarCheck}
-          steps={followUpSteps}
-          isLoading={followUps.isLoading || followUpStages.isLoading}
-        />
+        <div className="xl:col-span-2">
+          <StatusOverviewCard
+            title="Follow-up Overview"
+            description="Leads by follow-up board stage for the selected period."
+            icon={CalendarCheck}
+            steps={pipelineQuery.data ?? []}
+            isLoading={pipelineQuery.isLoading}
+          />
+        </div>
         <StatusOverviewCard
           title="Project Overview"
           description="Project distribution by status for the selected period."

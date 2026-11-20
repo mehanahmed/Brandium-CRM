@@ -70,8 +70,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
 import { useAuth } from "@/lib/auth";
 import { formatCrmDate, formatCrmTime, formatCrmDateTime } from "@/lib/mysql-client";
 import { agentsQuery } from "@/lib/follow-ups";
@@ -108,6 +106,12 @@ import { DeleteProspectDialog } from "@/components/delete-prospect-dialog";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import { useAppFilters } from "@/lib/use-app-router";
+import {
+  DateRangePicker3,
+  getDateRangeForPredefined,
+} from "@/components/dashboard/date-range-picker3";
+
+const ALL_TIME = "all";
 
 function StatCard({
   label,
@@ -211,15 +215,27 @@ function ProspectsPageContent() {
   const [searchTerm, setSearchTerm] = useState(searchParams.search || "");
   const [debouncedSearch] = useDebounce(searchTerm, 500);
   const [stageTarget, setStageTarget] = useState<ChangeStageTarget | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(
-    searchParams.from
-      ? {
-          from: new Date(searchParams.from),
-          to: searchParams.to ? new Date(searchParams.to) : undefined,
-        }
-      : undefined,
-  );
-  const [calOpen, setCalOpen] = useState(false);
+  // Range (from / to as yyyy-MM-dd) is page state, not in the URL. No range = This Month
+  // (like the Dashboard); "All Time" is stored as from=all.
+  const isAllTime = searchParams.from === ALL_TIME;
+  const thisMonth = getDateRangeForPredefined("thisMonth");
+  const rangeFrom = isAllTime
+    ? undefined
+    : (searchParams.from ?? (thisMonth?.from ? format(thisMonth.from, "yyyy-MM-dd") : undefined));
+  const rangeTo = isAllTime
+    ? undefined
+    : searchParams.from
+      ? searchParams.to
+      : thisMonth?.to
+        ? format(thisMonth.to, "yyyy-MM-dd")
+        : undefined;
+  const pickerRange: DateRange | undefined = rangeFrom
+    ? {
+        from: new Date(`${rangeFrom}T00:00:00`),
+        to: rangeTo ? new Date(`${rangeTo}T00:00:00`) : undefined,
+      }
+    : undefined;
+  const [datePickerKey, setDatePickerKey] = useState(0);
   const [addProspectOpen, setAddProspectOpen] = useState(false);
   const [editProspect, setEditProspect] = useState<Prospect | null>(null);
   const [editProspectId, setEditProspectId] = useState<string | null>(null);
@@ -341,14 +357,30 @@ function ProspectsPageContent() {
 
   const handleResetFilters = () => {
     setSearchTerm("");
-    setDateRange(undefined);
-    setSearchParams({ page: 1 });
+    setDatePickerKey((k) => k + 1);
+    // setSearchParams merges, so every filter must be cleared by name
+    setSearchParams({
+      page: 1,
+      search: undefined,
+      stage: undefined,
+      service: undefined,
+      agent: undefined,
+      from: undefined,
+      to: undefined,
+    });
     toast.info("All filters have been reset.");
   };
 
   const seesAllLeads = useSeesAllData("leads");
-  const stats = useQuery(prospectsStatsQuery(user?.id || "", seesAllLeads));
-  const prospects = useQuery(prospectsQuery(searchParams, user?.id || "", seesAllLeads));
+  const stats = useQuery(
+    prospectsStatsQuery(user?.id || "", seesAllLeads, undefined, {
+      from: rangeFrom,
+      to: rangeTo,
+    }),
+  );
+  const prospects = useQuery(
+    prospectsQuery({ ...searchParams, from: rangeFrom, to: rangeTo }, user?.id || "", seesAllLeads),
+  );
   const stages = useQuery(stagesQuery());
   const agents = useQuery(agentsQuery());
   const services = useQuery(servicesQueryOptions());
@@ -376,18 +408,23 @@ function ProspectsPageContent() {
           { id: "denied_payment", name: "Denied Payment" },
         ];
 
-  const isInitialMount = useRef(true);
+  // Search typed in the box goes to the filters after the debounce; a search set from
+  // outside (a link like /prospects?search=X, or Reset) is copied back into the box.
+  const lastTypedSearch = useRef(searchParams.search ?? "");
 
   useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
     const next = debouncedSearch.trim();
-    if (next !== (searchParams.search ?? "")) {
-      setSearchParams({ search: next || undefined, page: 1 });
-    }
-  }, [debouncedSearch, searchParams.search, setSearchParams]);
+    if (next === lastTypedSearch.current) return;
+    lastTypedSearch.current = next;
+    setSearchParams({ search: next || undefined, page: 1 });
+  }, [debouncedSearch, setSearchParams]);
+
+  useEffect(() => {
+    const current = searchParams.search ?? "";
+    if (current === lastTypedSearch.current) return;
+    lastTypedSearch.current = current;
+    setSearchTerm(current);
+  }, [searchParams.search]);
 
   const updateFilter = (key: string, value: string | undefined) => {
     setSearchParams({ [key]: value, page: 1 });
@@ -400,6 +437,19 @@ function ProspectsPageContent() {
         description="Manage sales pipeline prospects, follow-up stages, and lead assignments."
       >
         <div className="flex items-center gap-2">
+          <DateRangePicker3
+            key={datePickerKey}
+            initialRange={pickerRange}
+            onDateRangeChange={(range) =>
+              setSearchParams({
+                from: range?.from ? format(range.from, "yyyy-MM-dd") : ALL_TIME,
+                to: range?.to ? format(range.to, "yyyy-MM-dd") : undefined,
+                page: 1,
+              })
+            }
+            align="end"
+            className="h-10 rounded-full bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm"
+          />
           <Button
             variant="outline"
             onClick={handleExportCSV}
@@ -603,70 +653,6 @@ function ProspectsPageContent() {
               </SelectContent>
             </Select>
           )}
-
-          {/* Date Range Picker */}
-          <Popover open={calOpen} onOpenChange={setCalOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                className={`bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 gap-1.5 text-xs font-normal shadow-2xs ${
-                  dateRange?.from ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <CalendarIcon className="size-3.5" />
-                {dateRange?.from ? (
-                  dateRange.to ? (
-                    <span>
-                      {format(dateRange.from, "MMM d")} – {format(dateRange.to, "MMM d, yyyy")}
-                    </span>
-                  ) : (
-                    format(dateRange.from, "MMM d, yyyy")
-                  )
-                ) : (
-                  "Date Range"
-                )}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <Calendar
-                mode="range"
-                selected={dateRange}
-                onSelect={(range) => {
-                  setDateRange(range);
-                  if (range?.from) {
-                    updateFilter("from", format(range.from, "yyyy-MM-dd"));
-                  }
-                  if (range?.to) {
-                    updateFilter("to", format(range.to, "yyyy-MM-dd"));
-                    setCalOpen(false);
-                  }
-                  if (!range?.from) {
-                    updateFilter("from", undefined);
-                    updateFilter("to", undefined);
-                  }
-                }}
-                numberOfMonths={2}
-                initialFocus
-              />
-              {dateRange?.from && (
-                <div className="border-t p-2 flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => {
-                      setDateRange(undefined);
-                      updateFilter("from", undefined);
-                      updateFilter("to", undefined);
-                      setCalOpen(false);
-                    }}
-                  >
-                    Clear dates
-                  </Button>
-                </div>
-              )}
-            </PopoverContent>
-          </Popover>
         </div>
       </div>
 

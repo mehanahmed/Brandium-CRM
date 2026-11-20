@@ -195,6 +195,7 @@ export const followUpBoardQueryOptions = (userId: string | undefined, isAdmin: b
       const res = await runMySQLQuery<Record<string, unknown>[]>(
         // One card per active prospect. The row is its latest follow-up, or its latest
         // stage row when it has none, so a prospect without a follow-up still shows.
+        // Newest prospect first; each board column keeps this order.
         `SELECT h.id, p.id AS prospect_id, h.follow_up_due_at, h.follow_up_status, h.follow_up_assigned_to,
                 h.changed_by, h.changed_at, h.note, p.stage_id,
                 p.contact_name, p.business_name, p.phone, p.address, p.logo_url,
@@ -211,7 +212,8 @@ export const followUpBoardQueryOptions = (userId: string | undefined, isAdmin: b
          LEFT JOIN \`profiles\` prof ON prof.id = h.follow_up_assigned_to
          LEFT JOIN \`users\` c ON c.id = h.changed_by
          LEFT JOIN \`profiles\` cprof ON cprof.id = h.changed_by
-         WHERE (p.is_active = 1 OR p.is_active IS NULL);`,
+         WHERE (p.is_active = 1 OR p.is_active IS NULL)
+         ORDER BY p.created_at DESC, p.id DESC;`,
       );
       if (!res.success) throw new Error(res.error || "Failed to load follow-ups");
 

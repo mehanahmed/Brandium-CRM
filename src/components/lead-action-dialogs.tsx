@@ -16,8 +16,8 @@ import { addStageNote } from "@/lib/stages";
 export type LeadAction = { type: "order" | "quotation" | "meeting"; prospect: Prospect };
 
 /**
- * Order, quotation and meeting dialogs opened from a lead. Each successful save adds an
- * activity to the lead's timeline, e.g. "[Order] ORD-123 created".
+ * Order, quotation and meeting dialogs opened from a lead. Order and quotation saves log their
+ * own activity and stage move (src/lib/prospect-sale-link.ts); a meeting adds a "[Meeting]" note.
  */
 export function LeadActionDialogs({
   action,
@@ -62,11 +62,9 @@ export function LeadActionDialogs({
           phone: prospect.phone || "",
         }}
         onSave={async (data) => {
-          const res = await saveOrder.mutateAsync(data);
-          await logActivity(
-            prospect,
-            `[Order] ${res?.order_number ? `${res.order_number} ` : ""}created · BDT ${Number(data.total_amount || 0).toLocaleString("en-US")}`,
-          );
+          // The save moves the lead to Sales won and logs the activity (matched by phone)
+          await saveOrder.mutateAsync(data);
+          void queryClient.invalidateQueries({ queryKey: ["stage-history", prospect.id] });
           onClose();
         }}
         isSaving={saveOrder.isPending}
@@ -89,11 +87,9 @@ export function LeadActionDialogs({
           phone: prospect.phone || "",
         }}
         onSave={async (data) => {
+          // The save moves the lead to Quotation Sent and logs the activity
           await saveQuotation.mutateAsync(data);
-          await logActivity(
-            prospect,
-            `[Quotation] Quotation created · BDT ${Number(data.budget || 0).toLocaleString("en-US")}`,
-          );
+          void queryClient.invalidateQueries({ queryKey: ["stage-history", prospect.id] });
           onClose();
         }}
         isSaving={saveQuotation.isPending}

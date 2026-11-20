@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebounce } from "use-debounce";
 import { format } from "date-fns";
@@ -43,6 +43,7 @@ import {
 import { stageHistoryDetailsQuery } from "@/lib/stage-history";
 import { parseNotesToArray } from "@/lib/stages";
 import { agentOptionsQueryOptions } from "@/lib/won-sales";
+import { useAppFilters } from "@/lib/use-app-router";
 
 const PAGE_SIZE = 15;
 
@@ -75,16 +76,22 @@ export default function StageHistoryPageWrapper() {
 }
 
 function StageHistoryPage() {
-  const searchParams = useSearchParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  // Filters stay in page memory, not in the URL
+  const [filters, setFilters] = useAppFilters<{
+    agent?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+  }>({});
 
-  const urlAgent = searchParams.get("agent") || undefined;
-  const urlFrom = searchParams.get("from") || undefined;
-  const urlTo = searchParams.get("to") || undefined;
-  const currentPage = Math.max(1, Number(searchParams.get("page") || "1"));
+  const urlAgent = filters.agent;
+  const urlFrom = filters.from;
+  const urlTo = filters.to;
+  const currentPage = Math.max(1, Number(filters.page || 1));
 
-  const [searchTerm, setSearchTerm] = useState(searchParams.get("search") || "");
+  const [searchTerm, setSearchTerm] = useState("");
   const [debouncedSearch] = useDebounce(searchTerm, 400);
 
   const history = useQuery(
@@ -99,13 +106,7 @@ function StageHistoryPage() {
   const { data: agents = [] } = useQuery(agentOptionsQueryOptions());
 
   const setParams = (updates: Record<string, string | undefined>, resetPage = true) => {
-    const params = new URLSearchParams(searchParams.toString());
-    for (const [key, value] of Object.entries(updates)) {
-      if (value) params.set(key, value);
-      else params.delete(key);
-    }
-    if (resetPage) params.set("page", "1");
-    router.push(`?${params.toString()}`);
+    setFilters({ ...updates, ...(resetPage ? { page: 1 } : {}) });
   };
 
   const rows = history.data?.data ?? [];
@@ -200,7 +201,7 @@ function StageHistoryPage() {
               className="h-9 text-xs text-destructive hover:text-destructive"
               onClick={() => {
                 setSearchTerm("");
-                router.push("?page=1");
+                setFilters({ agent: undefined, from: undefined, to: undefined, page: 1 });
               }}
             >
               Reset

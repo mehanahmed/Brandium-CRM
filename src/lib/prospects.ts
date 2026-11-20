@@ -412,11 +412,12 @@ export const prospectsQuery = (filters: ProspectFilters, userId: string, isAdmin
       if (filters.service && filters.service !== "all") {
         rows = rows.filter((p) => p.service_id === filters.service);
       }
+      // Compare the yyyy-MM-dd part: "2026-11-18 01:55" > "2026-11-18" dropped the last day
       if (filters.from) {
-        rows = rows.filter((p) => p.created_at >= filters.from!);
+        rows = rows.filter((p) => (p.created_at || "").slice(0, 10) >= filters.from!);
       }
       if (filters.to) {
-        rows = rows.filter((p) => p.created_at <= filters.to!);
+        rows = rows.filter((p) => (p.created_at || "").slice(0, 10) <= filters.to!);
       }
 
       // Apply dynamic sorting

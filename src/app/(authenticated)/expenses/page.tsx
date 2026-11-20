@@ -53,7 +53,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { DateRangePicker3 } from "@/components/dashboard/date-range-picker3";
+import {
+  DateRangePicker3,
+  getDateRangeForPredefined,
+} from "@/components/dashboard/date-range-picker3";
 import { FinanceSummaryCard } from "@/components/dashboard/finance-summary-card";
 import { uploadImageFile } from "@/lib/upload";
 import { computeFinanceSummary, dashboardExpenseQuery } from "@/lib/dashboard-finance";
@@ -79,8 +82,12 @@ export default function ExpensesPage() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [paymentMethod, setPaymentMethod] = useState("all");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  // This Month by default, like the Dashboard; Reset goes back to it
+  const [defaultRange] = useState(() => getDateRangeForPredefined("thisMonth"));
+  const defaultFrom = defaultRange?.from ? format(defaultRange.from, "yyyy-MM-dd") : "";
+  const defaultTo = defaultRange?.to ? format(defaultRange.to, "yyyy-MM-dd") : "";
+  const [fromDate, setFromDate] = useState(defaultFrom);
+  const [toDate, setToDate] = useState(defaultTo);
   const [dateResetKey, setDateResetKey] = useState(0);
   const [page, setPage] = useState(1);
 
@@ -298,7 +305,11 @@ export default function ExpensesPage() {
               ))}
             </SelectContent>
           </Select>
-          {(search || category !== "all" || paymentMethod !== "all" || fromDate || toDate) && (
+          {(search ||
+            category !== "all" ||
+            paymentMethod !== "all" ||
+            fromDate !== defaultFrom ||
+            toDate !== defaultTo) && (
             <Button
               variant="ghost"
               size="icon"
@@ -307,8 +318,8 @@ export default function ExpensesPage() {
                 setSearch("");
                 setCategory("all");
                 setPaymentMethod("all");
-                setFromDate("");
-                setToDate("");
+                setFromDate(defaultFrom);
+                setToDate(defaultTo);
                 setDateResetKey((k) => k + 1);
                 setPage(1);
               }}
@@ -319,6 +330,7 @@ export default function ExpensesPage() {
           )}
           <DateRangePicker3
             key={dateResetKey}
+            initialRange={defaultRange}
             onDateRangeChange={(range) => {
               setFromDate(range?.from ? format(range.from, "yyyy-MM-dd") : "");
               setToDate(

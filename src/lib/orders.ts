@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "./mysql-api";
 import { generateUUID, getMySQLTimestamp } from "./mysql-client";
 import { ORDER_INSERT_SQL } from "./trusted-sql";
+import { linkSaleToProspect } from "./prospect-sale-link";
 import type { AdvancePaymentRecord } from "./projects";
 import { parseTerms, resolveTerms } from "@/components/sales/terms-editor";
 
@@ -68,11 +69,15 @@ export function parseContentPlannerBrief(value: unknown): ContentPlannerBrief | 
 }
 
 /** Saves the Content Planner brief on the order (only the `brief` column changes). */
+
+// orders.updated_at is ON UPDATE CURRENT_TIMESTAMP, so any UPDATE bumps it, and the stage
+// change right after a brief then fails its updated_at check ("changed by someone else").
+// Assigning the column to itself is the MySQL/MariaDB way to stop that automatic bump.
+const BRIEF_UPDATE_SQL = "UPDATE orders SET brief = ?, updated_at = updated_at WHERE id = ?;";
+const STAGE_BRIEF_UPDATE_SQL =
+  "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?), updated_at = updated_at WHERE id = ?;";
 export async function saveOrderBrief(orderId: string, brief: ContentPlannerBrief): Promise<void> {
-  await runMySQLWrite("UPDATE orders SET brief = ? WHERE id = ?;", [
-    JSON.stringify(brief),
-    orderId,
-  ]);
+  await runMySQLWrite(BRIEF_UPDATE_SQL, [JSON.stringify(brief), orderId]);
 }
 
 /** Script Writer requirements (Facebook / video ratio / model / product / CTA ...). Text fields are
@@ -164,10 +169,7 @@ export async function saveStageBrief(
   key: string,
   values: Record<string, string>,
 ): Promise<void> {
-  await runMySQLWrite(
-    "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?) WHERE id = ?;",
-    [JSON.stringify({ [key]: values }), orderId],
-  );
+  await runMySQLWrite(STAGE_BRIEF_UPDATE_SQL, [JSON.stringify({ [key]: values }), orderId]);
 }
 
 /** Videographer shooting brief, stored under `stage_briefs.videographer`. */
@@ -214,10 +216,7 @@ export async function saveVideographerBrief(
   orderId: string,
   brief: VideographerBrief,
 ): Promise<void> {
-  await runMySQLWrite(
-    "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?) WHERE id = ?;",
-    [JSON.stringify({ videographer: brief }), orderId],
-  );
+  await runMySQLWrite(STAGE_BRIEF_UPDATE_SQL, [JSON.stringify({ videographer: brief }), orderId]);
 }
 
 /** Saves Script Writer requirements under `stage_briefs.scriptWriter`, keeping other stage briefs. */
@@ -225,10 +224,10 @@ export async function saveScriptWriterRequirements(
   orderId: string,
   requirements: ScriptWriterRequirements,
 ): Promise<void> {
-  await runMySQLWrite(
-    "UPDATE orders SET stage_briefs = JSON_MERGE_PATCH(COALESCE(stage_briefs, '{}'), ?) WHERE id = ?;",
-    [JSON.stringify({ scriptWriter: requirements }), orderId],
-  );
+  await runMySQLWrite(STAGE_BRIEF_UPDATE_SQL, [
+    JSON.stringify({ scriptWriter: requirements }),
+    orderId,
+  ]);
 }
 
 /** Brandium production workflow, ids stored in `orders.status`. */
@@ -759,6 +758,19 @@ export function useSaveOrderMutation() {
         ]);
       }
       notifyNewPayments(id, payload.advance_payments);
+      // The lead with this phone moves to Sales won with an activity row. The order is
+      // already saved, so a failure here only warns.
+      try {
+        await linkSaleToProspect({
+          kind: "order",
+          phone: payload.phone,
+          note: `Order ${orderNumber} created · BDT ${Number(payload.total_amount || 0).toLocaleString("en-US")}`,
+          userId: payload.crm_user_id,
+        });
+      } catch (err) {
+        console.warn("Order saved; prospect stage not updated:", err);
+        toast.warning("Order saved, but the matching prospect could not be updated.");
+      }
       return { id, order_number: orderNumber };
     },
     onSuccess: (_, variables) => {

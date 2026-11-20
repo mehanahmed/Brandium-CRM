@@ -64,10 +64,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  FollowUpDateRangePicker,
-  type FollowUpDateFilterValue,
-  isFollowUpInDateFilter,
-} from "./follow-up-date-range-picker";
+  DateRangePicker3,
+  getDateRangeForPredefined,
+} from "@/components/dashboard/date-range-picker3";
 import { useAuth } from "@/lib/auth";
 import {
   followUpBoardQueryOptions,
@@ -162,10 +161,13 @@ export function FollowUpBoard() {
 
   const [searchTerm, setSearchTerm] = useState("");
   const [searchField, setSearchField] = useState<SearchField>("all");
-  const [dateFilter, setDateFilter] = useState<FollowUpDateFilterValue>({
-    type: "all",
-    label: "All Scheduled Dates",
-  });
+  // This Month by default, like the Dashboard. It filters scheduled follow-up dates only:
+  // a lead without a follow-up has no date, so it always stays on the board.
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() =>
+    getDateRangeForPredefined("thisMonth"),
+  );
+  const rangeFrom = dateRange?.from ? format(dateRange.from, "yyyy-MM-dd") : null;
+  const rangeTo = dateRange?.to ? format(dateRange.to, "yyyy-MM-dd") : rangeFrom;
   const [activeFollowUp, setActiveFollowUp] = useState<FollowUpBoardItem | null>(null);
 
   const sensors = useSensors(
@@ -193,12 +195,10 @@ export function FollowUpBoard() {
   const filteredItems = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return items.filter((item) => {
-      // Filter by scheduled follow-up date
-      if (
-        dateFilter.type !== "all" &&
-        (!item.has_follow_up || !isFollowUpInDateFilter(item.due_at, dateFilter))
-      ) {
-        return false;
+      // Filter by scheduled follow-up date (MySQL DATETIME text, already Dhaka time)
+      if (rangeFrom && item.has_follow_up) {
+        const day = item.due_at.slice(0, 10);
+        if (day < rangeFrom || (rangeTo && day > rangeTo)) return false;
       }
       if (!term) return true;
       const name = `${item.business_name} ${item.contact_name}`.toLowerCase();
@@ -209,7 +209,7 @@ export function FollowUpBoard() {
         name.includes(term) || phone.includes(term) || item.address.toLowerCase().includes(term)
       );
     });
-  }, [items, searchTerm, searchField, dateFilter]);
+  }, [items, searchTerm, searchField, rangeFrom, rangeTo]);
 
   const itemsByStage = useMemo(() => {
     const grouped: Record<string, FollowUpBoardItem[]> = {};
@@ -370,11 +370,11 @@ export function FollowUpBoard() {
               <SelectItem value="phone">Phone</SelectItem>
             </SelectContent>
           </Select>
-          <FollowUpDateRangePicker
-            value={dateFilter}
-            onChange={setDateFilter}
-            totalFilteredCount={filteredItems.length}
-            className="rounded-xl h-10 w-full sm:w-auto"
+          <DateRangePicker3
+            initialRange={dateRange}
+            onDateRangeChange={(range) => setDateRange(range)}
+            align="start"
+            className="h-10 rounded-xl bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm w-full sm:w-auto"
           />
         </div>
         <div className="flex items-center gap-2">

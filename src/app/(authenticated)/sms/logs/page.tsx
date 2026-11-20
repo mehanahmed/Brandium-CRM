@@ -3,10 +3,13 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { DateRange } from "react-day-picker";
+import {
+  DateRangePicker3,
+  getDateRangeForPredefined,
+} from "@/components/dashboard/date-range-picker3";
 import { format } from "date-fns";
 import {
   AlertCircle,
-  CalendarIcon,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -21,10 +24,8 @@ import {
 import { Link } from "@/components/navigation-link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar as CalendarPicker } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -80,8 +81,10 @@ export default function SmsLogsPage() {
   const [search, setSearch] = useState("");
   const [agentFilter, setAgentFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<SmsStatus | "all">("all");
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const [calOpen, setCalOpen] = useState(false);
+  // This Month by default, like the Dashboard
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() =>
+    getDateRangeForPredefined("thisMonth"),
+  );
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -213,49 +216,15 @@ export default function SmsLogsPage() {
             </SelectContent>
           </Select>
 
-          <Popover open={calOpen} onOpenChange={setCalOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                className="bg-white dark:bg-card text-xs h-9 justify-start font-normal gap-2"
-              >
-                <CalendarIcon className="size-3.5 text-muted-foreground" />
-                {dateRange?.from
-                  ? dateRange.to
-                    ? `${format(dateRange.from, "LLL dd")} – ${format(dateRange.to, "LLL dd")}`
-                    : format(dateRange.from, "LLL dd, yyyy")
-                  : "Date Range"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <CalendarPicker
-                mode="range"
-                selected={dateRange}
-                onSelect={(range) => {
-                  setDateRange(range);
-                  resetPage();
-                  if (range?.to) setCalOpen(false);
-                }}
-                numberOfMonths={2}
-              />
-              {dateRange && (
-                <div className="border-t p-2 flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => {
-                      setDateRange(undefined);
-                      resetPage();
-                      setCalOpen(false);
-                    }}
-                  >
-                    Clear dates
-                  </Button>
-                </div>
-              )}
-            </PopoverContent>
-          </Popover>
+          <DateRangePicker3
+            initialRange={dateRange}
+            onDateRangeChange={(range) => {
+              setDateRange(range);
+              resetPage();
+            }}
+            align="end"
+            className="h-9 rounded-full bg-white dark:bg-card border-slate-200 dark:border-slate-800 shadow-sm"
+          />
         </div>
       </div>
 

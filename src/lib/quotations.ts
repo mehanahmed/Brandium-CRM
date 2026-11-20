@@ -5,6 +5,7 @@ import { generateUUID, getMySQLTimestamp } from "./mysql-client";
 import { QUOTATION_INSERT_SQL } from "./trusted-sql";
 import { resolveStageIcon, type Stage } from "./stages";
 import { parseTerms } from "@/components/sales/terms-editor";
+import { linkSaleToProspect } from "./prospect-sale-link";
 
 export type QuotationAssignee = {
   id: string;
@@ -419,33 +420,6 @@ export const quotationsQueryOptions = (userId?: string, isAdmin: boolean = false
     staleTime: 1000 * 30,
   });
 
-/** A new quotation moves its prospect to the "Quotation Sent" stage, with a history row. */
-async function moveProspectToQuotationSent(prospectId: string, quotationId: string) {
-  const stageRes = await runMySQLQuery<Record<string, unknown>[]>(
-    "SELECT `id` FROM `stages` WHERE LOWER(TRIM(`name`)) = 'quotation sent' LIMIT 1;",
-  );
-  const stageId =
-    stageRes.success && stageRes.data?.[0] ? String(stageRes.data[0]["id"]) : "quotation-sent";
-  const currRes = await runMySQLQuery<Record<string, unknown>[]>(
-    "SELECT `stage_id` FROM `prospects` WHERE `id` = ? LIMIT 1;",
-    [prospectId],
-  );
-  const fromStageId =
-    currRes.success && currRes.data?.[0] ? String(currRes.data[0]["stage_id"] || "") || null : null;
-  const now = getMySQLTimestamp();
-  await runMySQLWrite("UPDATE `prospects` SET `stage_id` = ?, `updated_at` = ? WHERE `id` = ?;", [
-    stageId,
-    now,
-    prospectId,
-  ]);
-  await runMySQLWrite(
-    `INSERT INTO \`prospect_stage_history\`
-       (\`id\`, \`prospect_id\`, \`from_stage_id\`, \`to_stage_id\`, \`note\`, \`changed_at\`)
-     VALUES (?, ?, ?, ?, ?, ?);`,
-    [generateUUID(), prospectId, fromStageId, stageId, "Quotation created", now],
-  );
-}
-
 export function useSaveQuotationMutation() {
   const queryClient = useQueryClient();
 
@@ -556,7 +530,25 @@ export function useSaveQuotationMutation() {
             id,
           ]);
         }
-        if (payload.prospect_id) await moveProspectToQuotationSent(payload.prospect_id, id);
+        // The lead (linked, or found by phone) moves to Quotation Sent with an activity row.
+        // The quotation is already saved, so a failure here only warns.
+        try {
+          const codeRes = await runMySQLQuery<Record<string, unknown>[]>(
+            "SELECT quotation_code FROM quotations WHERE id = ? LIMIT 1;",
+            [id],
+          );
+          const code = String(codeRes.data?.[0]?.["quotation_code"] || "Quotation");
+          await linkSaleToProspect({
+            kind: "quotation",
+            prospectId: payload.prospect_id,
+            phone: payload.client_phone,
+            note: `Quotation ${code} sent · BDT ${Number(payload.budget || 0).toLocaleString("en-US")}`,
+            userId: payload.created_by,
+          });
+        } catch (err) {
+          console.warn("Quotation saved; prospect stage not updated:", err);
+          toast.warning("Quotation saved, but the matching prospect could not be updated.");
+        }
       }
 
       return { success: true, id };

@@ -19,7 +19,6 @@ import {
   Check,
   CalendarDays,
   FileText,
-  CalendarIcon,
   Layers,
   ListFilter,
   X,
@@ -71,8 +70,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar as CalendarPicker } from "@/components/ui/calendar";
 import { MeetingDetailModal } from "@/components/meeting-detail-modal";
 import { ScheduleMeetingDialog } from "@/components/schedule-meeting-dialog";
 import { EditMeetingDialog } from "@/components/edit-meeting-dialog";
@@ -80,6 +77,10 @@ import { DeleteMeetingDialog } from "@/components/delete-meeting-dialog";
 import { MeetingCalendarView } from "@/components/meetings/meeting-calendar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DateRange } from "react-day-picker";
+import {
+  DateRangePicker3,
+  getDateRangeForPredefined,
+} from "@/components/dashboard/date-range-picker3";
 import { format } from "date-fns";
 
 import {
@@ -207,8 +208,10 @@ export default function MeetingsPage() {
   const [cancelTarget, setCancelTarget] = useState<Meeting | null>(null);
   const [meetingTypeFilter, setMeetingTypeFilter] = useState<MeetingType | "all">("all");
   const [statusFilter, setStatusFilter] = useState<MeetingStatus | "all">("all");
-  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
-  const [calOpen, setCalOpen] = useState(false);
+  // This Month by default, like the Dashboard
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() =>
+    getDateRangeForPredefined("thisMonth"),
+  );
   const [view, setView] = useState<"list" | "calendar">("list");
 
   const filters: MeetingFilters = {
@@ -410,59 +413,12 @@ export default function MeetingsPage() {
             </SelectContent>
           </Select>
 
-          <Popover open={calOpen} onOpenChange={setCalOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                className={`bg-white gap-2 text-xs font-normal ${
-                  dateRange?.from ? "text-foreground" : "text-muted-foreground"
-                }`}
-              >
-                <CalendarIcon className="size-3.5" />
-                {dateRange?.from ? (
-                  dateRange.to ? (
-                    <span>
-                      {format(dateRange.from, "MMM d")} &ndash;{" "}
-                      {format(dateRange.to, "MMM d, yyyy")}
-                    </span>
-                  ) : (
-                    format(dateRange.from, "MMM d, yyyy")
-                  )
-                ) : (
-                  "Date Range"
-                )}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <CalendarPicker
-                mode="range"
-                selected={dateRange}
-                onSelect={(range) => {
-                  setDateRange(range);
-                  if (range?.to) {
-                    setCalOpen(false);
-                  }
-                }}
-                numberOfMonths={2}
-                initialFocus
-              />
-              {dateRange?.from && (
-                <div className="border-t p-2 flex justify-end">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => {
-                      setDateRange(undefined);
-                      setCalOpen(false);
-                    }}
-                  >
-                    Clear dates
-                  </Button>
-                </div>
-              )}
-            </PopoverContent>
-          </Popover>
+          <DateRangePicker3
+            initialRange={dateRange}
+            onDateRangeChange={(range) => setDateRange(range)}
+            align="end"
+            className="h-9 rounded-full bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm"
+          />
         </div>
       </div>
 

@@ -896,8 +896,8 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
 
 - **Brief Saves Must Not Bump `orders.updated_at` (stale-order error on Assign)**:
   - Saving a brief (`saveOrderBrief`, `saveStageBrief`, `saveVideographerBrief`, `saveScriptWriterRequirements`) used to set `updated_at = now`. The Assign step still held the old `updated_at`, so `writeStatusChange` failed its `updated_at` check with "This order was changed by someone else" (Runtime Error).
-  - Brief saves now write only the brief columns. The `updated_at` check stays for `status_history` writes, which are the only whole-value overwrites that need it.
-  - Rule: a save that does not change `status_history` must not touch `updated_at`.
+  - Leaving `updated_at` out of the brief UPDATE was NOT enough: `orders.updated_at` is `ON UPDATE CURRENT_TIMESTAMP`, so MySQL bumps it on any UPDATE of the row and Assign still failed. Brief saves now use `BRIEF_UPDATE_SQL` / `STAGE_BRIEF_UPDATE_SQL` (`src/lib/orders.ts`), which set `updated_at = updated_at`; assigning the column to itself stops the automatic bump. Verified on MariaDB: old save bumped 10:00:00 to now, new save kept it, then the Assign update matched 1 row.
+  - Rule: a save that does not change `status_history` must keep `updated_at` with `updated_at = updated_at` in the same UPDATE. Before relying on any `updated_at` check, run `SHOW CREATE TABLE` and look for `ON UPDATE`.
 
 - **Production Dashboard Counts Real Stage Work, Not `designer_id` Alone**:
   - `designer_id` keeps the last assignee after an order moves to a non-assignable stage (`COALESCE(?, designer_id)`), so counting `designer_id === me` showed orders that had already left the user's stage (e.g. an SW user still "had" an order sitting in Video Graphy Complete).
@@ -936,3 +936,26 @@ Single-context layout with root `CONTEXT.md` and `docs/adr/`. See `docs/agents/d
   - Messages go to `api.telegram.org`, or to `TELEGRAM_API_PROXY` when set (for networks where Telegram is blocked). Motion Box's third-party Cloudflare worker was not copied. "View Order" buttons are sent only when `app_url` is a public https address.
   - Quotation and project payments do not notify yet.
   - **UI is the Motion Box card, same to same** (user request): one "Telegram Bot Integration" card (Bot Token, comma-separated Chat IDs, Redirect Domain = `app_url`, footer "Save Telegram Settings"), Motion Box toasts and chat-ID validation message. Saving turns sending on (`is_enabled = 1`, Motion Box has no on/off switch) and keeps the stored add/adjust flags. The earlier extras (on/off and add/adjust switches, test message, recent-messages table) were removed from the page; `/api/telegram/test` and the `telegram_payment_notices` log still exist.
+
+- **Prospects Date Range = Dashboard `DateRangePicker3`, Last Day Included**:
+  - `/prospects` uses `DateRangePicker3` in the page header (left of Export CSV), like the Dashboard. Filters (search, stage, service, agent, `from` / `to`, page) are kept in page memory by `useAppFilters` (`src/lib/use-app-router.ts`), NOT in the URL (user request: no `?page=1&from=...` in the address bar); they reset on reload. No range = This Month (default, same as the Dashboard); "All Time" is stored as `from=all`. The page passes the resolved `rangeFrom` / `rangeTo` to both queries, never the raw `from`. The 7 stat cards (`prospectsStatsQuery(..., { from, to })`) and the list both follow it. Reset Filters clears every filter by name (`setSearchParams` merges, so `{ page: 1 }` alone kept the old stage/agent/date) and remounts the picker (`datePickerKey`). The old URL hook also dropped any value equal to `all`, which silently turned All Time back into This Month.
+  - `prospectsQuery` compared the full `created_at` text with the bare date (`"2026-11-18 01:55" <= "2026-11-18"` is false), so leads from the range's last day never showed and "Today" was always empty. Compare `created_at.slice(0, 10)` with the `yyyy-MM-dd` bounds (MySQL DATETIME text is already Dhaka time).
+
+- **Filters Never Live in the URL (all pages)**:
+  - Per user request no page writes filters to the address bar. `useAppFilters` (`src/lib/use-app-router.ts`) keeps them in React state; Prospects and Admin → Stage History both use it. New list pages must use it too, never `router.push("?...")` / `useSearchParams` for filters.
+  - A link may still open a page pre-filtered (`/prospects?search=X` from Stage Management and Stage History): the hook reads those values once after mount (not in the initial state, to avoid a hydration mismatch) and then clears the address bar with `history.replaceState`.
+  - A page that keeps its own text box for search must copy an outside change back into the box (Prospects: `lastTypedSearch` ref + two effects). The old effect pushed the empty box value over a search that arrived from a link.
+  - `/track/[id]?print=1` (Orders "Invoice" button) is a one-time print command, not a filter, and stays.
+
+- **New Order / Quotation Moves the Matching Lead (`linkSaleToProspect`, `src/lib/prospect-sale-link.ts`)**:
+  - After an order is created (`useSaveOrderMutation`) its lead moves to **Sales won**; after a quotation is created (`useSaveQuotationMutation`) to **Quotation Sent**. Each adds a `prospect_stage_history` row with a note like `Order ORD-123 created · BDT 9,000` / `Quotation QT-1001 sent · BDT 5,000`, which shows in Lead Details → Activity.
+  - The lead is the quotation's `prospect_id`, else the active prospect whose `phone` or `alternative_phone` ends with the same last 9 digits (`+880 1…`, `01…` and `1…` all match; newest prospect wins). Fewer than 9 digits = no match.
+  - A quotation never moves a lead whose stage group is `won` back; a lead already in the target stage only gets the activity row. Lookups go through `/api/mysql`, so a non-admin only moves leads they can see.
+  - The record is saved first; a failed lead update only shows a warning toast and never undoes the save. Edits do not move leads, only creates.
+  - `LeadActionDialogs` no longer adds its own `[Order]` / `[Quotation]` notes (they duplicated this activity); the `[Meeting]` note stays. This replaces the old quotation-only `moveProspectToQuotationSent`.
+
+- **Every Date Range = Dashboard `DateRangePicker3`, This Month by Default**:
+  - Per user request every page date filter uses `DateRangePicker3` (`src/components/dashboard/date-range-picker3.tsx`) and starts on This Month (`getDateRangeForPredefined("thisMonth")`): Dashboard, Prospects, Orders, Quotations, Expenses, Meetings, SMS Logs, Agent Activity and the Follow-ups board. `/projects` was left as it is (user request). Do not add another range picker; reuse this one.
+  - Quotations (`/quotations`): picker in the header left of Export; it filters the 8 summary cards, the table and Export by the quotation date (`order_date`, else `created_at`, via `businessDay`), the same date the Dashboard "Total Quotation" card uses.
+  - Expenses: Reset goes back to This Month (not empty), and the reset button shows only when a filter differs from that default.
+  - Follow-ups board: the old `FollowUpDateRangePicker` (Today / Tomorrow / Next 7 Days / Overdue presets) was deleted. The range filters scheduled follow-up dates only; a lead with no follow-up date always stays on the board, otherwise the This Month default would empty the Prospect column.

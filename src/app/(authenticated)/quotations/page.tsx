@@ -1,6 +1,13 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { format } from "date-fns";
+import type { DateRange } from "react-day-picker";
+import {
+  DateRangePicker3,
+  getDateRangeForPredefined,
+} from "@/components/dashboard/date-range-picker3";
+import { businessDay } from "@/lib/dashboard-finance";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -138,7 +145,21 @@ export default function QuotationsPage() {
   const { data: usersData } = useQuery(crmUsersQueryOptions());
   const { data: servicesData } = useQuery(servicesQueryOptions());
 
-  const quotations = useMemo(() => quotationsData?.quotations || [], [quotationsData]);
+  // Date range like the Dashboard: This Month by default; matched on the quotation date
+  // (order_date, else created_at), the same date the Dashboard "Total Quotation" card uses
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(() =>
+    getDateRangeForPredefined("thisMonth"),
+  );
+  const quotations = useMemo(() => {
+    const all = quotationsData?.quotations || [];
+    const from = dateRange?.from ? format(dateRange.from, "yyyy-MM-dd") : null;
+    const to = dateRange?.to ? format(dateRange.to, "yyyy-MM-dd") : from;
+    if (!from) return all;
+    return all.filter((q) => {
+      const day = businessDay(q.order_date || q.created_at);
+      return day >= from && (!to || day <= to);
+    });
+  }, [quotationsData, dateRange]);
   const stages = useMemo(
     () => quotationsData?.stages || QUOTATION_WORKFLOW_STAGES,
     [quotationsData],
@@ -343,6 +364,15 @@ export default function QuotationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
+          <DateRangePicker3
+            initialRange={dateRange}
+            onDateRangeChange={(range) => {
+              setDateRange(range);
+              setCurrentPage(1);
+            }}
+            align="end"
+            className="h-10 rounded-full bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 shadow-sm"
+          />
           <Button
             variant="outline"
             onClick={handleExportCSV}
