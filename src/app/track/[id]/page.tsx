@@ -56,6 +56,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
+import { invoiceBgUrl, useAppSettings } from "@/lib/app-settings";
 import { useAuth } from "@/lib/auth";
 import { crmUsersQueryOptions, type CrmUser } from "@/lib/admin-users";
 import {
@@ -93,6 +94,8 @@ const INFO_BOX_CLASS =
 
 /** Clone of ERPAPP `/track/[trackingId]` (core sections), for logged-in Brandium users. */
 export default function OrderTrackPage() {
+  // Letterhead chosen in Admin → Settings (falls back to the built-in one)
+  const { data: appSettings } = useAppSettings();
   const params = useParams();
   const searchParams = useSearchParams();
   const rawId = params ? params["id"] : undefined;
@@ -449,7 +452,7 @@ export default function OrderTrackPage() {
             style={{
               width: "210mm",
               minHeight: "297mm",
-              backgroundImage: "url('/brandium_invoice_bg.jpg')",
+              backgroundImage: `url('${invoiceBgUrl(appSettings)}')`,
               backgroundSize: "100% 100%",
               backgroundRepeat: "no-repeat",
               backgroundPosition: "center top",

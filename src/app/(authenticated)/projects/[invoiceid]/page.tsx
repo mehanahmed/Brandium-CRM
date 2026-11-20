@@ -43,6 +43,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { runMySQLQuery } from "@/lib/mysql-api";
+import { invoiceBgUrl, useAppSettings } from "@/lib/app-settings";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 
@@ -399,6 +400,8 @@ const getTimelineBadgeStyles = (status: string, isLatest: boolean) => {
 };
 
 export default function ProjectInvoicePage() {
+  // Letterhead chosen in Admin → Settings (falls back to the built-in one)
+  const { data: appSettings } = useAppSettings();
   const params = useParams();
   const router = useRouter();
   const rawParam = params ? params["invoiceid"] : undefined;
@@ -1150,7 +1153,7 @@ export default function ProjectInvoicePage() {
           style={{
             width: "210mm",
             minHeight: "297mm",
-            backgroundImage: "url('/brandium_invoice_bg.jpg')",
+            backgroundImage: `url('${invoiceBgUrl(appSettings)}')`,
             backgroundSize: "100% 100%",
             backgroundRepeat: "no-repeat",
             backgroundPosition: "center top",

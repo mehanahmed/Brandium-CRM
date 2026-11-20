@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import JsBarcode from "jsbarcode";
 import { resolveOrderTerms } from "@/lib/orders";
 import type { CrmOrder } from "@/lib/orders";
+import { invoiceBgUrl, type AppSettings } from "@/lib/app-settings";
 
 /** Everything the shared order / quotation PDF needs, already formatted for display. */
 export type SalesPdfData = {
@@ -65,9 +66,13 @@ async function buildPdfBlob(data: SalesPdfData): Promise<Blob> {
     import("@/components/sales/sales-pdf-document"),
   ]);
   const origin = window.location.origin;
+  // Same letterhead as the on-screen sheet (Admin → Settings); built-in one if unset or unreachable
+  const settings = await fetch("/api/settings", { cache: "no-store" })
+    .then((r) => r.json() as Promise<{ data?: AppSettings }>)
+    .catch(() => ({}) as { data?: AppSettings });
   const full: SalesPdfData = {
     ...data,
-    letterheadUrl: `${origin}/brandium_invoice_bg.jpg`,
+    letterheadUrl: `${origin}${invoiceBgUrl(settings.data)}`,
     barcodeDataUrl: barcodePng(data.code),
     paidStampUrl: data.isPaid ? `${origin}/paid-stamp.png` : undefined,
   };

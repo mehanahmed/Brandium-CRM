@@ -360,6 +360,20 @@ export async function ensureMySQLTablesExist(
       `);
       await conn.query("INSERT IGNORE INTO `telegram_settings` (`id`) VALUES ('default');");
 
+      // `app_settings` — single-row app settings: invoice/quotation letterhead, maintenance mode
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS \`app_settings\` (
+          \`id\` VARCHAR(36) NOT NULL,
+          \`invoice_bg_url\` VARCHAR(500) NULL,
+          \`maintenance_mode\` TINYINT(1) NOT NULL DEFAULT 0,
+          \`maintenance_message\` TEXT NULL,
+          \`updated_by\` VARCHAR(36) NULL,
+          \`updated_at\` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (\`id\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+      await conn.query("INSERT IGNORE INTO `app_settings` (`id`) VALUES ('default');");
+
       // `telegram_payment_notices` — one row per payment sent to Telegram (the key stops repeats)
       await conn.query(`
         CREATE TABLE IF NOT EXISTS \`telegram_payment_notices\` (
@@ -959,6 +973,7 @@ export async function ensureMySQLTablesExist(
           ('perm-admin-roles', 'roles', 'admin', 'Manage system roles and permissions'),
           ('perm-admin-sms-gateway', 'sms_gateway', 'admin', 'Configure SMS Gateway settings'),
           ('perm-admin-notifications', 'notifications', 'admin', 'Configure Telegram notifications'),
+          ('perm-admin-settings', 'settings', 'admin', 'Change app settings and maintenance mode'),
           ('perm-admin-backup', 'backup', 'admin', 'Manage database backups and exports')
         ON DUPLICATE KEY UPDATE \`description\` = VALUES(\`description\`), \`resource\` = VALUES(\`resource\`), \`action\` = VALUES(\`action\`);
       `);
@@ -1006,6 +1021,7 @@ export async function ensureMySQLTablesExist(
           ('role-global-admin', 'perm-admin-roles'),
           ('role-global-admin', 'perm-admin-sms-gateway'),
           ('role-global-admin', 'perm-admin-notifications'),
+          ('role-global-admin', 'perm-admin-settings'),
           ('role-global-admin', 'perm-admin-backup'),
 
           ('role-global-agent', 'perm-prospects-read'),

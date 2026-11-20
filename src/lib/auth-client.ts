@@ -23,7 +23,8 @@ export type SignInResult = {
       user: AuthUser;
     };
   } | null;
-  error: { message: string } | null;
+  /** `maintenance`: refused because maintenance mode is on (Admin → Settings). */
+  error: { message: string; maintenance?: boolean } | null;
 };
 
 export async function signInWithPassword(credentials: {
@@ -45,7 +46,10 @@ export async function signInWithPassword(credentials: {
     if (!res.ok || !body.success || !body.user) {
       return {
         data: null,
-        error: { message: body.error || "Invalid email or password." },
+        error: {
+          message: body.error || "Invalid email or password.",
+          maintenance: body.maintenance === true,
+        },
       };
     }
 

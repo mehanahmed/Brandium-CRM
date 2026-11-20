@@ -5,6 +5,8 @@ import { getRolePermissions, getUnscopedTables } from "@/lib/data-scope-server";
 import { linkChecksFor, runLinkGuardedWrite } from "@/lib/link-guard-server";
 import { isAdminOnlySql, scopeSqlForUser, SqlScopeError, writeTargetOf } from "@/lib/sql-scope";
 import { TRUSTED_SQL } from "@/lib/trusted-sql";
+import { loadAppSettings } from "@/lib/app-settings-server";
+import { DEFAULT_MAINTENANCE_MESSAGE } from "@/lib/app-settings";
 import { broadcastChange, isWriteSql, tablesWrittenBy } from "@/lib/realtime-server";
 
 // Shared setup tables everyone reads: only roles with the matching manage permission may write
@@ -16,6 +18,21 @@ const TABLE_WRITE_PERMISSIONS: Record<string, string> = {
 export async function POST(req: Request) {
   const session = readSession(req);
   if (!session) return unauthorized();
+
+  // Maintenance mode (Admin → Settings): only admins reach the data
+  if (!session.admin) {
+    const settings = await loadAppSettings();
+    if (settings.maintenance_mode) {
+      return NextResponse.json(
+        {
+          success: false,
+          maintenance: true,
+          error: settings.maintenance_message || DEFAULT_MAINTENANCE_MESSAGE,
+        },
+        { status: 503 },
+      );
+    }
+  }
 
   try {
     const body = await req.json();

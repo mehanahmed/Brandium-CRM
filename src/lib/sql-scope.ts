@@ -13,7 +13,7 @@ import { escape } from "mysql2";
 export class SqlScopeError extends Error {}
 
 const PROTECTED_TABLES =
-  /\b(users|user_roles|roles|permissions|role_permissions|sms_gateway_settings|telegram_settings|telegram_payment_notices|sessions|order_stage_positions|followup_stages|tenants|memberships|schema_migrations)\b/i;
+  /\b(users|user_roles|roles|permissions|role_permissions|sms_gateway_settings|telegram_settings|telegram_payment_notices|app_settings|sessions|order_stage_positions|followup_stages|tenants|memberships|schema_migrations)\b/i;
 // Word boundary, not whitespace: `UPDATE`users`` and `UPDATE/**/users` are writes too.
 // `REPLACE(` is the string function (read), so REPLACE only counts when it starts a statement.
 const WRITE_SQL = /\b(insert|update|delete)\b|\breplace\s+(into\b|[`\w])/i;

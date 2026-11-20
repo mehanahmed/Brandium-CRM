@@ -16,6 +16,7 @@ const ADMIN_SECTION_PERMISSIONS = [
   "perm-stage-history-view",
   "perm-admin-sms-gateway",
   "perm-admin-notifications",
+  "perm-admin-settings",
   "perm-reports-view",
   "perm-admin-backup",
 ];

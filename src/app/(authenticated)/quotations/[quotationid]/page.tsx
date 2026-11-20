@@ -41,6 +41,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { runMySQLQuery } from "@/lib/mysql-api";
+import { invoiceBgUrl, useAppSettings } from "@/lib/app-settings";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { SalesPdfActions } from "@/components/sales/sales-pdf-actions";
@@ -217,6 +218,8 @@ const FALLBACK_DEMO_QUOTATION: QuotationRecord = {
 };
 
 export default function QuotationDetailPage() {
+  // Letterhead chosen in Admin → Settings (falls back to the built-in one)
+  const { data: appSettings } = useAppSettings();
   const params = useParams();
   const router = useRouter();
   const rawParam = params ? params["quotationid"] : undefined;
@@ -977,7 +980,7 @@ export default function QuotationDetailPage() {
           style={{
             width: "210mm",
             minHeight: "297mm",
-            backgroundImage: "url('/brandium_invoice_bg.jpg')",
+            backgroundImage: `url('${invoiceBgUrl(appSettings)}')`,
             backgroundSize: "100% 100%",
             backgroundRepeat: "no-repeat",
             backgroundPosition: "center top",

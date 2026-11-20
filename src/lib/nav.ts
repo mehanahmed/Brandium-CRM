@@ -6,6 +6,7 @@ import {
   MessagesSquare,
   RadioTower,
   BellRing,
+  Settings,
   ReceiptText,
   Activity,
   UserCog,
@@ -114,6 +115,12 @@ export const navGroups: NavGroup[] = [
         url: "/admin/notifications",
         icon: BellRing,
         permission: "perm-admin-notifications",
+      },
+      {
+        title: "Settings",
+        url: "/admin/settings",
+        icon: Settings,
+        permission: "perm-admin-settings",
       },
       {
         title: "Agent Reports",

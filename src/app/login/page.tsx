@@ -36,6 +36,10 @@ export default function LoginPage() {
       password: targetPass,
     });
 
+    if (error?.maintenance) {
+      router.push("/maintenance");
+      return;
+    }
     if (error || !data?.user) {
       setSubmitting(false);
       toast.error(error?.message || "Invalid email or password. Please check your credentials.");

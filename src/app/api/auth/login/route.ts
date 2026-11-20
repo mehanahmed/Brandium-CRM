@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { createSingleMySQLConnection } from "@/lib/mysql-server";
 import { ensureMySQLTablesExist } from "@/lib/auth.functions";
+import { loadAppSettings } from "@/lib/app-settings-server";
+import { DEFAULT_MAINTENANCE_MESSAGE } from "@/lib/app-settings";
 import {
   clearRawCookie,
   clearSessionCookie,
@@ -152,6 +154,22 @@ export async function POST(req: Request) {
     }
 
     const roleStr = userRoleRaw.toLowerCase();
+    const isAdminUser = roleStr === "admin" || permissions.includes("perm-admin-roles");
+
+    // Maintenance mode (Admin → Settings): only admins may sign in
+    if (!isAdminUser) {
+      const settings = await loadAppSettings(true);
+      if (settings.maintenance_mode) {
+        return NextResponse.json(
+          {
+            success: false,
+            maintenance: true,
+            error: settings.maintenance_message || DEFAULT_MAINTENANCE_MESSAGE,
+          },
+          { status: 503 },
+        );
+      }
+    }
 
     const res = NextResponse.json({
       success: true,
@@ -169,7 +187,7 @@ export async function POST(req: Request) {
     setSessionCookie(req, res, {
       id: String(user.id),
       role: roleStr,
-      admin: roleStr === "admin" || permissions.includes("perm-admin-roles"),
+      admin: isAdminUser,
     });
     return res;
   } catch (err) {
