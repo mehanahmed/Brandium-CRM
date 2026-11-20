@@ -67,25 +67,6 @@ export async function loadAppSettings(fresh = false): Promise<AppSettings> {
   return value;
 }
 
-/** A copy was found on another domain: switch maintenance mode on with a lock message. */
-export async function lockForUnlicensedCopy(host: string) {
-  const pool = await getMySQLPool();
-  const message = `Brandium CRM is locked: an unauthorised copy was found running on ${host}. Contact the administrator.`;
-  await withSettingsTable(() =>
-    pool.query(
-      `INSERT INTO \`app_settings\` (\`id\`, \`maintenance_mode\`, \`maintenance_message\`, \`updated_by\`)
-       VALUES ('default', 1, ?, 'license-lock')
-       ON DUPLICATE KEY UPDATE maintenance_mode = 1, maintenance_message = VALUES(maintenance_message),
-         updated_by = 'license-lock'`,
-      [message],
-    ),
-  );
-  delete store.__brandiumAppSettings;
-  console.error(
-    `LICENSE LOCK: unauthorised copy reported on ${host}; maintenance mode switched on.`,
-  );
-}
-
 export async function saveAppSettings(
   input: Pick<AppSettings, "invoice_bg_url" | "maintenance_mode" | "maintenance_message">,
   userId: string,

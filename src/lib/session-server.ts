@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { licenseProof } from "@/lib/license-service";
 
 /** Server-side login session, kept in a signed httpOnly cookie the browser cannot read or edit. */
 export type ServerSession = {
@@ -25,8 +26,11 @@ const secret = () =>
   process.env["SESSION_SECRET"] ||
   (secretCache.__brandiumSessionSecret ??= randomBytes(32).toString("hex"));
 
+// The license proof is part of the key: no valid license in production = no session can be signed.
 const sign = (payload: string) =>
-  createHmac("sha256", secret()).update(payload).digest("base64url");
+  createHmac("sha256", secret() + licenseProof())
+    .update(payload)
+    .digest("base64url");
 
 const isHttps = (req: Request) =>
   req.headers.get("x-forwarded-proto") === "https" || req.url.startsWith("https:");

@@ -64,3 +64,7 @@ brain/
 __pycache__/
 *.pyc
 .vibe/
+
+# License issuer and master private key (owner only), and the activated key
+scripts/license/
+.license
