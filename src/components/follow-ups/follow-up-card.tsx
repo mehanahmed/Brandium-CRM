@@ -69,7 +69,9 @@ export function FollowUpCard({
   const latestNote = parseNotesToItems(followUp.note).at(-1)?.text || "";
 
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
-    id: followUp.id,
+    // prospect_id, not the history row id: a lead with no history has id "" and many cards
+    // would share it, so dnd-kit dragged / dropped the wrong card
+    id: followUp.prospect_id,
     data: { followUp },
     disabled: isOverlay,
   });

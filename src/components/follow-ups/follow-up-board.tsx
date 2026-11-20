@@ -264,9 +264,10 @@ export function FollowUpBoard() {
     setActiveFollowUp(null);
   };
 
-  const handleDrop = (itemId: string, stage: FollowUpStage) => {
+  /** `prospectId`: one card per prospect, so it is the card's unique key (history `id` can be empty). */
+  const handleDrop = (prospectId: string, stage: FollowUpStage) => {
     setActiveFollowUp(null);
-    const item = items.find((i) => i.id === itemId);
+    const item = items.find((i) => i.prospect_id === prospectId);
     if (!item || followUpStageFor(item.status, stages)?.id === stage.id) return;
     setNoteTarget({ item, stage });
   };
@@ -445,7 +446,7 @@ export function FollowUpBoard() {
                   items={itemsByStage[stage.id] || []}
                   isLoading={isLoading}
                   isAdmin={isAdmin}
-                  onMoveToStage={(item, targetStage) => handleDrop(item.id, targetStage)}
+                  onMoveToStage={(item, targetStage) => handleDrop(item.prospect_id, targetStage)}
                   onAddUpdate={(item) => setNoteTarget({ item, stage })}
                   onViewDetails={setLeadDetailsItem}
                   onDelete={setDeleteItem}
@@ -480,7 +481,7 @@ export function FollowUpBoard() {
 
       {noteTarget && (
         <FollowUpNoteDialog
-          key={`${noteTarget.item.id}-${noteTarget.stage.id}`}
+          key={`${noteTarget.item.prospect_id}-${noteTarget.stage.id}`}
           businessName={noteTarget.item.business_name || noteTarget.item.contact_name}
           fromStatus={noteFromStage?.name || noteTarget.item.status}
           toStatus={noteTarget.stage.name}
