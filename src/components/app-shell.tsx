@@ -16,6 +16,7 @@ import {
   CalendarClock,
   CreditCard,
   ArrowRight,
+  ShieldAlert,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -35,7 +36,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useAuth } from "@/lib/auth";
-import { navGroups } from "@/lib/nav";
+import { navGroups, navItemForPath } from "@/lib/nav";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Link } from "@/components/navigation-link";
@@ -163,11 +164,33 @@ function Brand({ collapsed }: { collapsed: boolean }) {
   );
 }
 
+function NoAccess() {
+  return (
+    <div className="mx-auto my-12 max-w-md rounded-xl border bg-background p-10 text-center shadow-sm">
+      <div className="mx-auto mb-3 grid size-10 place-items-center rounded-full bg-destructive/10 text-destructive">
+        <ShieldAlert className="size-5" />
+      </div>
+      <h1 className="text-lg font-semibold">403 — Access denied</h1>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Your role does not have permission to open this page.
+      </p>
+      <Button asChild className="mt-5" variant="outline">
+        <Link href="/dashboard">Back to dashboard</Link>
+      </Button>
+    </div>
+  );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [accountDialog, setAccountDialog] = useState<"name" | "avatar" | "password" | null>(null);
-  const { profile, user, role, signOut, viewAsAdminName, stopViewAs } = useAuth();
+  const { profile, user, role, isAdmin, hasPermission, signOut, viewAsAdminName, stopViewAs } =
+    useAuth();
+  const pathname = usePathname();
+  // Same rule as the sidebar: a page hidden from the sidebar cannot be opened by URL either
+  const pagePermission = navItemForPath(pathname)?.permission;
+  const pageBlocked = !isAdmin && pagePermission !== undefined && !hasPermission(pagePermission);
 
   const { data: usersList } = useQuery(crmUsersQueryOptions());
   const currentUserRecord = usersList?.find(
@@ -453,7 +476,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         )}
 
-        <main className="flex-1 p-4 md:p-6">{children}</main>
+        <main className="flex-1 p-4 md:p-6">{pageBlocked ? <NoAccess /> : children}</main>
 
         <AdminEditUserInfoModal
           open={accountDialog === "name"}

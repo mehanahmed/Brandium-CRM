@@ -157,7 +157,7 @@ export function ProjectsKanbanBoard() {
       ),
     [stages, stageSettings, isAdmin, permissions],
   );
-  const seesAllOrders = useSeesAllData("orders");
+  const seesAllOrders = useSeesAllData("projects");
   const {
     data: ordersData,
     isLoading,

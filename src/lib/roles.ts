@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runMySQLQuery, runMySQLWrite } from "./mysql-api";
+import { runMySQLQuery, runMySQLWrite, runMySQLWriteOne } from "./mysql-api";
 import { generateUUID } from "./mysql-client";
 
 export type RolePermissionItem = {
@@ -166,7 +166,13 @@ export const DEFAULT_SYSTEM_PERMISSIONS: RolePermissionItem[] = [
     id: "perm-reports-view",
     resource: "reports",
     action: "read",
-    description: "View performance reports and analytics",
+    description: "View the Agent Activity log",
+  },
+  {
+    id: "perm-agent-reports-view",
+    resource: "agent_reports",
+    action: "read",
+    description: "View the Agent Reports leaderboard",
   },
 
   // Administration
@@ -439,41 +445,59 @@ export function useSaveRoleMutation() {
           "SELECT is_system, name FROM `roles` WHERE id = ? LIMIT 1;",
           [roleId],
         );
+        const current = checkSys.data?.[0];
+        if (!checkSys.success || !current) throw new Error("Could not load the role. Try again.");
+        const oldName = String(current["name"] || "");
         const isSysRole =
-          checkSys.success &&
-          Array.isArray(checkSys.data) &&
-          (Boolean(checkSys.data[0]?.["is_system"]) ||
-            ["admin", "agent", "artist"].includes(
-              String(checkSys.data[0]?.["name"] || "").toLowerCase(),
-            ));
+          Boolean(current["is_system"]) ||
+          ["admin", "agent", "artist"].includes(oldName.toLowerCase());
 
         if (isSysRole) {
           // Keep system role name intact, update description only
-          await runMySQLQuery("UPDATE `roles` SET `description` = ? WHERE `id` = ?;", [
+          await runMySQLWrite("UPDATE `roles` SET `description` = ? WHERE `id` = ?;", [
             payload.description || null,
             roleId,
           ]);
         } else {
-          await runMySQLQuery("UPDATE `roles` SET `name` = ?, `description` = ? WHERE `id` = ?;", [
+          await runMySQLWrite("UPDATE `roles` SET `name` = ?, `description` = ? WHERE `id` = ?;", [
             name,
             payload.description || null,
             roleId,
           ]);
+          // Users hold the role by name (upper-case, see the user forms); a rename must carry
+          // them along or they match no role and lose every permission.
+          if (oldName.trim().toUpperCase() !== name.toUpperCase()) {
+            await runMySQLWrite(
+              "UPDATE `users` SET `role` = ? WHERE UPPER(TRIM(`role`)) = UPPER(TRIM(?));",
+              [name.toUpperCase(), oldName],
+            );
+          }
         }
       } else {
-        await runMySQLQuery(
+        await runMySQLWrite(
           "INSERT INTO `roles` (`id`, `name`, `description`, `is_system`) VALUES (?, ?, ?, 0);",
           [roleId, name, payload.description || null],
         );
       }
 
-      // Sync role permissions
-      await runMySQLQuery("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [roleId]);
-      for (const permId of payload.permission_ids) {
-        await runMySQLQuery(
-          "INSERT IGNORE INTO `role_permissions` (`role_id`, `permission_id`) VALUES (?, ?);",
-          [roleId, permId],
+      // Add the new set first, then drop the rest: a failure part-way leaves the old or a
+      // larger set, never a role with half its permissions gone. Both throw on failure.
+      const ids = [...new Set(payload.permission_ids)];
+      if (ids.length > 0) {
+        await runMySQLWrite(
+          `INSERT IGNORE INTO \`role_permissions\` (\`role_id\`, \`permission_id\`) VALUES ${ids
+            .map(() => "(?, ?)")
+            .join(", ")};`,
+          ids.flatMap((id) => [roleId, id]),
         );
+        await runMySQLWrite(
+          `DELETE FROM \`role_permissions\` WHERE \`role_id\` = ? AND \`permission_id\` NOT IN (${ids
+            .map(() => "?")
+            .join(", ")});`,
+          [roleId, ...ids],
+        );
+      } else {
+        await runMySQLWrite("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [roleId]);
       }
 
       return { success: true, id: roleId };
@@ -514,8 +538,16 @@ export function useDeleteRoleMutation() {
         );
       }
 
-      await runMySQLQuery("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [role.id]);
-      await runMySQLQuery("DELETE FROM `roles` WHERE `id` = ? AND `is_system` = 0;", [role.id]);
+      // The users check above returns [] when its lookup fails, so the delete checks again itself
+      await runMySQLWriteOne(
+        `DELETE FROM \`roles\` WHERE \`id\` = ? AND \`is_system\` = 0 AND NOT EXISTS (
+           SELECT 1 FROM \`users\` u WHERE u.is_deleted = 0
+             AND (UPPER(TRIM(u.role)) = UPPER(TRIM(?)) OR UPPER(TRIM(u.role)) = UPPER(TRIM(?))));`,
+        [role.id, role.name, role.id],
+      ).catch(() => {
+        throw new Error(`Role "${role.name}" was not deleted: users still have it, or it is gone.`);
+      });
+      await runMySQLWrite("DELETE FROM `role_permissions` WHERE `role_id` = ?;", [role.id]);
       return { success: true };
     },
     onSuccess: () => {

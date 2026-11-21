@@ -4,10 +4,19 @@
  * Pages that read the same tables share one area, so their settings always match.
  */
 export const DATA_SCOPE_AREAS = {
+  // Prospects and Follow UP (and Orders and Projects) read the same tables but have their own
+  // setting. Each page filters its own rows by its setting; the server, which cannot tell pages
+  // apart, opens a table when any page on it is "All". That is no wider than what the role can
+  // already see on that other page.
   leads: {
-    label: "Leads",
+    label: "Prospects",
     tables: ["prospects", "prospect_stage_history", "activities"],
-    pages: ["/prospects", "/follow-ups"],
+    pages: ["/prospects"],
+  },
+  followups: {
+    label: "Follow UP",
+    tables: ["prospects", "prospect_stage_history", "activities"],
+    pages: ["/follow-ups"],
   },
   meetings: { label: "Meetings", tables: ["meetings"], pages: ["/meetings"] },
   quotations: {
@@ -16,11 +25,16 @@ export const DATA_SCOPE_AREAS = {
     pages: ["/quotations"],
   },
   orders: {
-    label: "Orders & Projects",
+    label: "Orders",
     tables: ["orders", "order_comments", "projects", "project_assignees"],
-    pages: ["/orders", "/projects"],
+    pages: ["/orders"],
   },
-  sms: { label: "SMS", tables: ["sms_logs"], pages: ["/sms/send", "/sms/logs"] },
+  projects: {
+    label: "Projects",
+    tables: ["orders", "order_comments", "projects", "project_assignees"],
+    pages: ["/projects"],
+  },
+  sms: { label: "SMS", tables: ["sms_logs"], pages: ["/sms/logs"] },
   expenses: { label: "Expenses", tables: ["expenses"], pages: ["/expenses"] },
 } as const;
 

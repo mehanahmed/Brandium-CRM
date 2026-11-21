@@ -35,6 +35,16 @@ export type NavGroup = {
   items: NavItem[];
 };
 
+/** The sidebar item a URL belongs to (`/quotations/QT-1` -> Quotations), longest match wins. */
+export function navItemForPath(pathname: string): NavItem | undefined {
+  let best: NavItem | undefined;
+  for (const item of navGroups.flatMap((g) => g.items)) {
+    const hit = pathname === item.url || pathname.startsWith(`${item.url}/`);
+    if (hit && (!best || item.url.length > best.url.length)) best = item;
+  }
+  return best;
+}
+
 export const navGroups: NavGroup[] = [
   {
     label: "Workspace",
@@ -126,7 +136,7 @@ export const navGroups: NavGroup[] = [
         title: "Agent Reports",
         url: "/admin/agent-reports",
         icon: Activity,
-        permission: "perm-reports-view",
+        permission: "perm-agent-reports-view",
       },
       {
         title: "Stage Management",

@@ -15,6 +15,20 @@ const TABLE_WRITE_PERMISSIONS: Record<string, string> = {
   services: "perm-services-manage",
 };
 
+// Page data: a role may write these tables only when it has some permission for the page
+// (the same rule that shows the page in the sidebar). Leads tables are left out: orders,
+// quotations and meetings also write stage history and activities for the matching lead.
+const PAGE_WRITE_PREFIXES: Record<string, string[]> = {
+  expenses: ["perm-expenses-"],
+  meetings: ["perm-meetings-"],
+  quotations: ["perm-quotations-"],
+  quotation_assignees: ["perm-quotations-"],
+  orders: ["perm-orders-", "perm-projects-"],
+  order_comments: ["perm-orders-", "perm-projects-"],
+  projects: ["perm-projects-"],
+  project_assignees: ["perm-projects-"],
+};
+
 export async function POST(req: Request) {
   const session = readSession(req);
   if (!session) return unauthorized();
@@ -83,7 +97,14 @@ export async function POST(req: Request) {
     if (!session.admin) {
       const target = writeTargetOf(runSql);
       const needed = target ? TABLE_WRITE_PERMISSIONS[target] : undefined;
-      if (needed && !(await getRolePermissions(session.role)).has(needed)) return forbidden();
+      const prefixes = target ? PAGE_WRITE_PREFIXES[target] : undefined;
+      if (needed || prefixes) {
+        const perms = await getRolePermissions(session.role);
+        if (needed && !perms.has(needed)) return forbidden();
+        if (prefixes && ![...perms].some((p) => prefixes.some((x) => p.startsWith(x)))) {
+          return forbidden();
+        }
+      }
     }
 
     // A non-admin write that touches link rows must not open someone else's lead, quotation

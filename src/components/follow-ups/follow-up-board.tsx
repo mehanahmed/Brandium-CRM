@@ -146,7 +146,7 @@ const restrictToBoard: Modifier = ({ transform, draggingNodeRect }) => {
 /** Clone of ERPAPP `FollowUpKanbanClient.tsx`: one card per prospect, grouped by its pipeline stage. */
 export function FollowUpBoard() {
   const { user, profile, isAdmin } = useAuth();
-  const seesAllLeads = useSeesAllData("leads");
+  const seesAllLeads = useSeesAllData("followups");
   const userName = profile?.full_name || "Admin";
   const { data: itemsData, isLoading } = useQuery({
     ...followUpBoardQueryOptions(user?.id, seesAllLeads),

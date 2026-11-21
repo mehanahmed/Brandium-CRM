@@ -934,6 +934,21 @@ export async function ensureMySQLTablesExist(
         ON DUPLICATE KEY UPDATE \`is_system\` = 1, \`description\` = VALUES(\`description\`);
       `);
 
+      // Pages that used to share one permission now have their own ([new id, old shared id]),
+      // so changing one page in the Roles matrix no longer changes the other. On a new id's
+      // first seed only, roles holding the old id get it too, so nobody loses access and a
+      // later untick is not undone by a restart.
+      const PERMISSION_SPLITS: [string, string][] = [
+        ["perm-agent-reports-view", "perm-reports-view"],
+        ["perm-scope-all-followups", "perm-scope-all-leads"],
+        ["perm-scope-all-projects", "perm-scope-all-orders"],
+      ];
+      const [seededSplitRows] = await conn.query(
+        "SELECT `id` FROM `permissions` WHERE `id` IN (?);",
+        [PERMISSION_SPLITS.map(([id]) => id)],
+      );
+      const seededSplits = new Set((seededSplitRows as Array<{ id: string }>).map((r) => r.id));
+
       await conn.query(`
         INSERT INTO \`permissions\` (\`id\`, \`resource\`, \`action\`, \`description\`)
         VALUES
@@ -962,11 +977,14 @@ export async function ensureMySQLTablesExist(
           ('perm-expenses-manage', 'expenses', 'manage', 'Create and manage expenses'),
           ('perm-sms-send', 'sms', 'send', 'Send bulk SMS to clients'),
           ('perm-sms-logs', 'sms', 'read', 'View SMS delivery logs'),
-          ('perm-reports-view', 'reports', 'read', 'View performance reports and analytics'),
-          ('perm-scope-all-leads', 'leads', 'scope_all', 'See every user''s prospects and follow-ups'),
+          ('perm-reports-view', 'reports', 'read', 'View the Agent Activity log'),
+          ('perm-agent-reports-view', 'agent_reports', 'read', 'View the Agent Reports leaderboard'),
+          ('perm-scope-all-leads', 'leads', 'scope_all', 'See every user''s prospects'),
+          ('perm-scope-all-followups', 'followups', 'scope_all', 'See every user''s follow-ups'),
+          ('perm-scope-all-projects', 'projects', 'scope_all', 'See every user''s projects'),
           ('perm-scope-all-meetings', 'meetings', 'scope_all', 'See every user''s meetings'),
           ('perm-scope-all-quotations', 'quotations', 'scope_all', 'See every user''s quotations'),
-          ('perm-scope-all-orders', 'orders', 'scope_all', 'See every user''s orders and projects'),
+          ('perm-scope-all-orders', 'orders', 'scope_all', 'See every user''s orders'),
           ('perm-scope-all-sms', 'sms', 'scope_all', 'See every user''s SMS logs'),
           ('perm-scope-all-expenses', 'expenses', 'scope_all', 'See every user''s expenses'),
           ('perm-admin-users', 'users', 'admin', 'Manage user accounts and credentials'),
@@ -1017,6 +1035,7 @@ export async function ensureMySQLTablesExist(
           ('role-global-admin', 'perm-sms-send'),
           ('role-global-admin', 'perm-sms-logs'),
           ('role-global-admin', 'perm-reports-view'),
+          ('role-global-admin', 'perm-agent-reports-view'),
           ('role-global-admin', 'perm-admin-users'),
           ('role-global-admin', 'perm-admin-roles'),
           ('role-global-admin', 'perm-admin-sms-gateway'),
@@ -1057,6 +1076,15 @@ export async function ensureMySQLTablesExist(
           ('role-stage-dev', 'perm-projects-read'), ('role-stage-dev', 'perm-projects-manage'),
           ('role-stage-dev', 'perm-orders-read'), ('role-stage-dev', 'perm-services-read');
       `);
+
+      for (const [newId, oldId] of PERMISSION_SPLITS) {
+        if (seededSplits.has(newId)) continue;
+        await conn.query(
+          `INSERT IGNORE INTO \`role_permissions\` (\`role_id\`, \`permission_id\`)
+           SELECT \`role_id\`, ? FROM \`role_permissions\` WHERE \`permission_id\` = ?;`,
+          [newId, oldId],
+        );
+      }
 
       // Seed default follow-up stages
       await conn.query(`

@@ -18,6 +18,7 @@ const ADMIN_SECTION_PERMISSIONS = [
   "perm-admin-notifications",
   "perm-admin-settings",
   "perm-reports-view",
+  "perm-agent-reports-view",
   "perm-admin-backup",
 ];
 
