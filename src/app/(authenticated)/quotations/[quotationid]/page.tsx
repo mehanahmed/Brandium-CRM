@@ -669,11 +669,20 @@ export default function QuotationDetailPage() {
     );
   }
 
+  // No advance yet: Amount Due would only repeat the total, so it is hidden. Without a discount
+  // Net Payable repeats Items Total too, so Items Total (bold) is the final line.
+  const hasAdvance = totalPaid > 0;
+  const itemsTotalIsFinal = !hasAdvance && specialDiscount <= 0;
+
   // Same content as the on-screen sheet, rendered by @react-pdf/renderer for Print / Download PDF
   const buildPdfData = (): SalesPdfData => {
     const code = String(quotation.quotation_code || quotation.id);
     const totals: SalesPdfData["totals"] = [
-      { label: "Items Total:", value: formatPdfBdt(orderSubtotal) },
+      {
+        label: "Items Total:",
+        value: formatPdfBdt(orderSubtotal),
+        tone: itemsTotalIsFinal ? "strong" : undefined,
+      },
     ];
     if (specialDiscount > 0) {
       totals.push({
@@ -682,7 +691,9 @@ export default function QuotationDetailPage() {
         tone: "minus",
       });
     }
-    totals.push({ label: "Net Payable:", value: formatPdfBdt(netPayable), tone: "strong" });
+    if (!itemsTotalIsFinal) {
+      totals.push({ label: "Net Payable:", value: formatPdfBdt(netPayable), tone: "strong" });
+    }
     if (totalPaid > 0) {
       totals.push({
         label: isPaid ? "Total Paid:" : "Total Advance Paid:",
@@ -730,7 +741,7 @@ export default function QuotationDetailPage() {
       })),
       terms: quotationTerms,
       totals,
-      amountDue: !isPaid && amountDue > 0.01 ? formatPdfBdt(amountDue) : null,
+      amountDue: hasAdvance && !isPaid && amountDue > 0.01 ? formatPdfBdt(amountDue) : null,
       isPaid,
     };
   };
@@ -1228,8 +1239,18 @@ export default function QuotationDetailPage() {
                 {/* Financial Summary Box */}
                 <div className="w-full max-w-xs sm:max-w-sm relative">
                   <div className="flex justify-between mb-1">
-                    <span className="text-sm text-muted-foreground">Items Total:</span>
-                    <span className="text-sm font-medium text-foreground">
+                    <span
+                      className={
+                        itemsTotalIsFinal
+                          ? "text-sm font-semibold text-foreground"
+                          : "text-sm text-muted-foreground"
+                      }
+                    >
+                      Items Total:
+                    </span>
+                    <span
+                      className={`text-sm text-foreground ${itemsTotalIsFinal ? "font-bold" : "font-medium"}`}
+                    >
                       {formatCurrencyBdt(orderSubtotal)}
                     </span>
                   </div>
@@ -1245,12 +1266,14 @@ export default function QuotationDetailPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-between mb-2 pt-1 border-t border-dashed border-border/40">
-                    <span className="text-sm font-semibold text-foreground">Net Payable:</span>
-                    <span className="text-sm font-bold text-foreground">
-                      {formatCurrencyBdt(netPayable)}
-                    </span>
-                  </div>
+                  {!itemsTotalIsFinal && (
+                    <div className="flex justify-between mb-2 pt-1 border-t border-dashed border-border/40">
+                      <span className="text-sm font-semibold text-foreground">Net Payable:</span>
+                      <span className="text-sm font-bold text-foreground">
+                        {formatCurrencyBdt(netPayable)}
+                      </span>
+                    </div>
+                  )}
 
                   {totalPaid > 0 && (
                     <div className="flex justify-between mb-2">
@@ -1280,6 +1303,7 @@ export default function QuotationDetailPage() {
                       />
                     </div>
                   ) : (
+                    hasAdvance &&
                     amountDue > 0.01 && (
                       <>
                         <Separator className="my-2 bg-border/50" />
